@@ -415,8 +415,9 @@ def train(args, device):
 
                         for i in range(tagger._w_cpt):
                             if tag_word_cpts[i, 1] > 0:
+                                tid = word_tag_id + tagger._curr_cpt - tagger._w_cpt
                                 writer.add_scalar(
-                                    "WordError/{}".format(tagger.id_error_type[-i - 1]),
+                                    "WordError/{}".format(tagger._id_to_tag[tid][1:]),
                                     tag_word_cpts[i, 0] / tag_word_cpts[i, 1],
                                     num_iter,
                                 )
