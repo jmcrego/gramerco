@@ -135,9 +135,13 @@ def get_homophone_idx(word, lex, tagger):
 
 
 def get_spell_idx(word, tagger):
+    l = len(word)
     possibilities = [
         candidate for candidate in tagger.worder.word_to_id.keys()
         if difflib.SequenceMatcher(None, word, candidate).ratio() > 0.75
+        or (l < 4
+            and abs(len(word) - len(candidate)) <= 1
+            and difflib.SequenceMatcher(None, word, candidate).ratio() > 0.45)
     ]
     # possibilities = [
     #     candidate for candidate in tagger.worder.word_to_id.keys()
@@ -282,7 +286,7 @@ def get_tags_vocs_from_proposals(
     )
     new_inflections = dict()
     # logging.info("len = " + str(len(toks)))
-    logging.info(str([tagger._id_to_tag[e.item()] for e in tag_proposals[:, 0] if e.item() != 0]))
+    # logging.info(str([tagger._id_to_tag[e.item()] for e in tag_proposals[:, 0] if e.item() != 0]))
     for i in range(len(toks)):
         can_move_on = False
         j = 0
@@ -304,6 +308,22 @@ def get_tags_vocs_from_proposals(
                     # word = tagger.worder.id_to_word[
                     #     idx[voc_out[i][idx].argmax(-1)].item()
                     # ]
+                    if tag.startswith("$REPLACE:SPELL"):
+                        logging.info("[" + ", ".join(
+                            tagger.worder.id_to_word[i.item()]
+                            for i in idx
+                        ) + "]")
+                        logging.info(
+                            toks[i]
+                            + "\t>>>>\t"
+                            + tagger.worder.id_to_word[
+                                voc_out[i].argmax(-1).item()
+                            ]
+                            + "\t|\t"
+                            + tagger.worder.id_to_word[
+                                idx[voc_out[i][idx].argmax(-1)].item()
+                            ]
+                        )
                     new_voc[i] = idx[voc_out[i][idx].argmax(-1)]
             elif tag.startswith("$SPLIT"):
                 idx = get_prefix_idx(toks[i], tagger)
@@ -316,7 +336,6 @@ def get_tags_vocs_from_proposals(
                     # ]
                     # logging.info("a|||  " + str(word))
                     new_voc[i] = idx[voc_out[i][idx].argmax(-1)]
-                    logging.info(str(new_voc[i].item()))
 
             elif tag.startswith("$INFLECT"):
                 inflection = tag.split(':')[-1]

@@ -154,7 +154,7 @@ def test(args):
                     # logging.info(" outputs ### " + str(out))
                     for k, t in enumerate(batch_txt):
 
-                        logging.info("-" * 100)
+                        # logging.info("-" * 100)
 
                         tag_out = out["tag_out"][k][out["attention_mask"][k].bool()]
                         voc_out = out["voc_out"][k][out["attention_mask"][k].bool()]
@@ -166,7 +166,7 @@ def test(args):
                         tag_ids_ = tag_ids
                         voc_ids_ = voc_ids
 
-                        logging.info(str(voc_ids_[tag_ids == tagger._tag_to_id["$SPLIT"]]))
+                        # logging.info(str(voc_ids_[tag_ids == tagger._tag_to_id["$SPLIT"]]))
 
                         # logging.info(tag_proposals.shape)
                         res = apply_tags_with_constraint(
@@ -179,7 +179,7 @@ def test(args):
                             args,
                             return_corrected=args.num_iter > 1,
                         )
-                        # tag_ids, voc_ids = res["tags"], res["vocs"]
+                        tag_ids, voc_ids = res["tags"], res["vocs"]
                         if args.num_iter > 1:
                             batch_txt[k] = res["text"]
 
@@ -229,12 +229,12 @@ def test(args):
                         # logging.info("voc >>> " + str(voc_ids[voc_ids.ne(-1)].cpu().long().numpy()))
 
                         if len(tag_ids) != len(ref_tag_ids):
-                            logging.info(
-                                "tag ids diff >>> "
-                                + str(i * args.batch_size + k)
-                                + "\t | " + str(len(tag_ids))
-                                + "-" + str(len(ref_tag_ids))
-                            )
+                            # logging.info(
+                            #     "tag ids diff >>> "
+                            #     + str(i * args.batch_size + k)
+                            #     + "\t | " + str(len(tag_ids))
+                            #     + "-" + str(len(ref_tag_ids))
+                            # )
                             continue
                         if len(voc_ids) != len(ref_voc_ids):
                             # logging.info("voc ids diff >>> " + str(i * args.batch_size + k))
@@ -297,11 +297,6 @@ def test(args):
                             tag_word_cpts[word_tag_id, 1] += (
                                 mask_voc
                             ).long().sum().item()
-                            if tagger._id_to_tag[tid] == "$SPLIT" and (ref_tag_ids == tid).any():
-                                logging.info(voc_ids[ref_tag_ids == tid])
-                                if mask_voc.any().item():
-                                    logging.info("ctp  " + str(tag_word_cpts[word_tag_id, 0]))
-                                    logging.info("tot  " + str(tag_word_cpts[word_tag_id, 1]))
     else:
         for i, test_batch in enumerate(tqdm(test_iter.next_epoch_itr(shuffle=False))):
 
