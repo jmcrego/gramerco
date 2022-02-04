@@ -19,10 +19,10 @@ SAVE_PATH=$DATA_DIR/models/gramerco-two-fr
 mkdir -p $SAVE_PATH
 mkdir -p $SAVE_PATH/tensorboard
 
-CUDA_VISIBLE_DEVICES=0,1 \
+CUDA_VISIBLE_DEVICES=0 \
 CUDA_LAUNCH_BLOCKING=1 \
 python infer_two.py \
-      --text "flauvert a été entrainé avec des frases comme celles-ci" \
+      --text "Je vais à pour voir la tour Eiffel." \
       --file $DATA_SRC \
       --log DEBUG \
       --save $SAVE_PATH \

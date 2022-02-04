@@ -18,7 +18,7 @@ from noiser.Noise import Lexicon
 import os
 import sys
 import re
-from infer_two import apply_tags
+from infer_two import apply_tags_with_constraint, read_lexicon
 from tqdm import tqdm
 from train_two import make_iterator
 from data.gramerco_dataset import GramercoDataset, make_dataset_from_prefix
@@ -47,11 +47,12 @@ def test(args):
         args.tokenizer
     )
     word_tokenizer = WordTokenizer(FlaubertTokenizer)
-    lexicon = Lexicon(args.path_to_lex)
+    # lexicon = Lexicon(args.path_to_lex)
     tagger = TagEncoder2(
         path_to_lex=args.path_to_lex,
         path_to_voc=args.path_to_voc,
     )
+    lex = read_lexicon(args.path_to_lex, tagger.worder.word_to_id.keys())
 
     if os.path.isfile(
         os.path.join(
@@ -126,11 +127,10 @@ def test(args):
     ref_tags_tot = list()
     ids_ref_tot = list()
     tag_word_cpts = np.zeros((tagger._w_cpt, 2))
-    uu = 0
     if args.raw:
         for i in tqdm(range(len(txt_src) // args.batch_size + 1)):
-            # if i > 0:
-            #     print()
+            # if i == 5:
+            #     break
             batch_txt = txt_src[args.batch_size * i:
                                 min(args.batch_size * (i + 1), len(txt_src))]
             batch_tag_ref = txt_tag[args.batch_size *
@@ -145,21 +145,6 @@ def test(args):
                     max_length=510,
                 ).to(device)
                 del toks["token_type_ids"]
-                for l in range(len(toks["input_ids"])):
-                    if uu == 0:
-                        logging.info(str(uu))
-                        logging.info("noise >>> " + str(" ".join(map(
-                            tokenizer._convert_id_to_token,
-                            toks["input_ids"][l][toks["attention_mask"][l].bool()].cpu().numpy()
-                        ))))
-                        logging.info(str(toks["input_ids"][l][toks["attention_mask"][l].bool()].cpu().numpy()))
-                        break
-                        # logging.info("tag --- " + str(" ".join([
-                        #     tagger.tag_to_id(tag) for tag in batch_tag_ref[l].split(" ")
-                        # ])))
-                        # ref_tag = torch.tensor()
-                        # sys.exit(0)
-                    uu += 1
 
                 # logging.info(toks["input_ids"].shape)
                 dec = list()
@@ -169,25 +154,67 @@ def test(args):
                     # logging.info(" outputs ### " + str(out))
                     for k, t in enumerate(batch_txt):
 
-                        tag_ids = out["tag_out"][k].argmax(-1)[out["attention_mask"][k].bool()]
-                        voc_ids = out["voc_out"][k].argmax(-1)[out["attention_mask"][k].bool()]
-                        ids = tagger.tag_word_to_id_vec(voc_ids, tag_ids)
+                        logging.info("-" * 100)
 
-                        tags = [tagger._id_to_tag[i.item()] for i in tag_ids]
-                        vocs = [tagger.worder.id_to_word[i.item()] for i in voc_ids]
+                        tag_out = out["tag_out"][k][out["attention_mask"][k].bool()]
+                        voc_out = out["voc_out"][k][out["attention_mask"][k].bool()]
+                        tag_ids = tag_out.argmax(-1)
+                        voc_ids = voc_out.argmax(-1)
+                        tag_proposals = torch.argsort(
+                            tag_out, dim=-1, descending=True
+                        )
+                        tag_ids_ = tag_ids
+                        voc_ids_ = voc_ids
 
-                        for i, tag in enumerate(tags):
-                            if tagger.is_radical_word_tag(tag):
-                                tags[i] = tag + '_' + vocs[i]
+                        logging.info(str(voc_ids_[tag_ids == tagger._tag_to_id["$SPLIT"]]))
 
-                        batch_txt[k] = apply_tags(
+                        # logging.info(tag_proposals.shape)
+                        res = apply_tags_with_constraint(
                             t,
-                            tags,
+                            tag_proposals,
+                            voc_out,
                             word_tokenizer,
                             tagger,
-                            lexicon,
+                            lex,
                             args,
+                            return_corrected=args.num_iter > 1,
                         )
+                        # tag_ids, voc_ids = res["tags"], res["vocs"]
+                        if args.num_iter > 1:
+                            batch_txt[k] = res["text"]
+
+                        # split_id = tagger._tag_to_id["$SPLIT"]
+                        # spl = (tag_ids_ == split_id)
+                        # if spl.any():
+                        #     logging.info("SPLIT before \t >>> "
+                        #         + str(tag_ids_[spl].cpu().numpy()) + "\t"
+                        #         + str(voc_ids_[spl].cpu().numpy()))
+                        #     logging.info("SPLIT after \t >>> "
+                        #         + str(tag_ids[spl].cpu().numpy()) + "\t"
+                        #         + str(voc_ids[spl].cpu().numpy()))
+                        # batch_txt[k] = ""
+                        # if len(voc_ids) == len(voc_ids_):
+                        #     diff = voc_ids[voc_ids != voc_ids_]
+                        #     if diff.numel() > 0:
+                        #         logging.info("%" + str(voc_ids_[voc_ids != voc_ids_].cpu().numpy()))
+                        #         logging.info("@" + str(voc_ids[voc_ids != voc_ids_].cpu().numpy()))
+
+                        ids = tagger.tag_word_to_id_vec(voc_ids, tag_ids)
+
+                        # seg_sent = word_tokenizer.tokenize(t.rstrip('\n'), max_length=510)
+                        #
+                        # tags = [tagger._id_to_tag[i.item()] for i in tag_ids]
+                        # vocs = [tagger.worder.id_to_word[i.item()]
+                        #     if i >= 0 else ''
+                        #     for i in voc_ids]
+                        #
+                        # for i, tag in enumerate(tags):
+                        #     logging.info("is radical " + tag + " " + str(tagger.is_radical_word_tag(tag)) + "  " + vocs[i])
+                        #     if tagger.is_radical_word_tag(tag):
+                        #         tags[i] = tag + '_' + vocs[i]
+                        #
+                        # logging.info(' '.join(txt + '|' + tag for txt, tag in zip(seg_sent, tags)))
+                        # sys.exit(8)
 
                         ref_ids = torch.tensor([
                             tagger.tag_to_id(tag)
@@ -198,15 +225,25 @@ def test(args):
 
                         ref = ref_ids.bool()
 
-                        logging.info("tag >>> " + str(tags.cpu().long().numpy()))
-                        logging.info("voc >>> " + str(vocs[vocs.ne(-1)].cpu().long().numpy()))
+                        # logging.info("tag >>> " + str(tag_ids.cpu().long().numpy()))
+                        # logging.info("voc >>> " + str(voc_ids[voc_ids.ne(-1)].cpu().long().numpy()))
 
                         if len(tag_ids) != len(ref_tag_ids):
+                            logging.info(
+                                "tag ids diff >>> "
+                                + str(i * args.batch_size + k)
+                                + "\t | " + str(len(tag_ids))
+                                + "-" + str(len(ref_tag_ids))
+                            )
                             continue
                         if len(voc_ids) != len(ref_voc_ids):
+                            # logging.info("voc ids diff >>> " + str(i * args.batch_size + k))
                             continue
-                        ref_tags.append(tag_ids)
-                        pred_tags.append(ref_tag_ids)
+                        if len(ids) != len(ref_ids):
+                            # logging.info("tot ids diff >>> " + str(i * args.batch_size + k))
+                            continue
+                        # ref_tags.append(tag_ids)
+                        # pred_tags.append(ref_tag_ids)
                         pred = tag_ids.ne(0)
                         ref = ref_tag_ids.ne(0)
                         TP += ((pred == ref) & ref).long().sum().item()
@@ -226,13 +263,48 @@ def test(args):
                             tagger.get_tag_category
                         ).long()
 
+                        ref_tags.append(ref_types)
+                        pred_tags.append(pred_types)
+                        ref_tags_tot.append(ref_tag_ids)
+                        pred_tags_tot.append(tag_ids)
+                        ids_ref_tot.append(ref_ids)
+
                         for err_id in range(len(tagger.id_error_type)):
                             pred_types_i = pred_types[ref_types == err_id]
                             accs[err_id] += (pred_types_i == err_id).long(
                             ).sum().item()
                             lens[err_id] += len(pred_types_i)
+
+                        for word_tag_id in range(tagger._w_cpt):
+                            tid = word_tag_id + tagger._curr_cpt - tagger._w_cpt
+                            # 195 194 193 192 191 ....
+                            # logging.info(str(type(tag_ids)))
+                            # logging.info(str(type(ref_tag_ids)))
+                            # logging.info(str(type(ref_tag_ids == tid)))
+                            # logging.info(str(type(tag_ids[ref_tag_ids == tid] == tid)))
+                            # logging.info(str((
+                            #     tag_ids[ref_tag_ids == tid] == tid
+                            # ).long().sum().item()))
+                            mask_voc = (
+                                (ref_tag_ids == tid)
+                                & voc_ids.ne(-1)
+                                & ref_voc_ids.ne(-1)
+                            )
+
+                            tag_word_cpts[word_tag_id, 0] += (
+                                voc_ids[mask_voc] == ref_voc_ids[mask_voc]
+                            ).long().sum().item()
+                            tag_word_cpts[word_tag_id, 1] += (
+                                mask_voc
+                            ).long().sum().item()
+                            if tagger._id_to_tag[tid] == "$SPLIT" and (ref_tag_ids == tid).any():
+                                logging.info(voc_ids[ref_tag_ids == tid])
+                                if mask_voc.any().item():
+                                    logging.info("ctp  " + str(tag_word_cpts[word_tag_id, 0]))
+                                    logging.info("tot  " + str(tag_word_cpts[word_tag_id, 1]))
     else:
         for i, test_batch in enumerate(tqdm(test_iter.next_epoch_itr(shuffle=False))):
+
             for k in range(len(test_batch["noise_data"]["input_ids"]) * 0 + 1):
                 xi = test_batch["noise_data"]["input_ids"][k][
                     test_batch["noise_data"]["attention_mask"][k].bool()
@@ -257,9 +329,42 @@ def test(args):
                 sizes_tgt = test_batch["tag_data"]["attention_mask"].sum(-1)
                 coincide_mask = (sizes_out == sizes_tgt)
 
-                tag_ids = out["tag_out"][coincide_mask].argmax(-1)[out["attention_mask"][coincide_mask].bool()]
-                voc_ids = out["voc_out"][coincide_mask].argmax(-1)[out["attention_mask"][coincide_mask].bool()]
-                ids = tagger.tag_word_to_id_vec(voc_ids, tag_ids)
+                tag_ids = out["tag_out"][coincide_mask].argmax(-1)[
+                    out["attention_mask"][coincide_mask].bool()
+                ]
+                voc_ids = out["voc_out"][coincide_mask].argmax(-1)[
+                    out["attention_mask"][coincide_mask].bool()
+                ]
+                # ids = tagger.tag_word_to_id_vec(voc_ids, tag_ids)
+
+                tag_proposals = torch.argsort(
+                    tag_ids, dim=-1, descending=True
+                )
+
+                t = tokenizer.decode(
+                    test_batch["noise_data"]["input_ids"][coincide_mask][:, 1:-1][
+                        torch.roll(
+                            test_batch["noise_data"]["attention_mask"][coincide_mask].bool(),
+                            -1,
+                            -1,
+                        )[:, 1:-1]
+                    ]
+                )
+                # logging.info(t)
+
+
+                res = apply_tags_with_constraint(
+                    t,
+                    tag_proposals,
+                    voc_ids,
+                    word_tokenizer,
+                    tagger,
+                    lex,
+                    args,
+                    return_corrected=False,
+                )
+                new_voc, new_tag = res["vocs"], res["tags"]
+                ids = tagger.tag_word_to_id_vec(new_voc, new_tag)
 
                 ref_ids = test_batch["tag_data"]["input_ids"][coincide_mask][
                     test_batch["tag_data"]["attention_mask"][coincide_mask].bool()
@@ -272,7 +377,9 @@ def test(args):
 
                 # logging.info("shape = " + str(tag_ids.shape) + " ----- " + str(ref_tag_ids.shape))
 
-                pred = tag_ids.ne(0)
+                # pred = tag_ids.ne(0)
+                # ref = ref_tag_ids.ne(0)
+                pred = new_tag.ne(0)
                 ref = ref_tag_ids.ne(0)
 
                 # logging.info("dec ref >>> " + str(ref.cpu().long().numpy()))
@@ -354,8 +461,9 @@ def test(args):
     logging.info("class total  = " + str(num_tot))
 
     for i in range(tagger._w_cpt):
+        tid = i + tagger._curr_cpt - tagger._w_cpt
         logging.info(
-            tagger.id_error_type[-i - 1] + " word acc = " +
+            tagger._id_to_tag[tid] + " word acc = " +
             str(tag_word_cpts[i, 0] / tag_word_cpts[i, 1])
         )
 
@@ -369,6 +477,7 @@ def test(args):
         normalize="true",
         cmap="coolwarm",
         display_labels=tagger.id_error_type,
+        values_format=".0%",
     )
     plt.xticks(rotation=90)
     plt.savefig(os.path.join(
@@ -382,6 +491,7 @@ def test(args):
         pred_tags_[(ref_tags_ != 0) & (pred_tags_ != 0)],
         cmap="coolwarm",
         display_labels=tagger.id_error_type[1:],
+        values_format=".0%",
     )
     plt.xticks(rotation=90)
     plt.savefig(os.path.join(
@@ -592,6 +702,16 @@ if __name__ == "__main__":
         '--data-bin',
         required=True,
         help='Path to data bin including basname'
+    )
+    parser.add_argument(
+        '--return-tag-voc',
+        action='store_true',
+        help='Return tag and voc ids when infering.'
+    )
+    parser.add_argument(
+        '--out-tags',
+        default=None,
+        help='File path where to write word|tag correction indications.'
     )
 
     args = parser.parse_args()

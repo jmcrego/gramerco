@@ -31,5 +31,7 @@ python test_model_two.py \
       --tokenizer flaubert/flaubert_base_cased \
       --batch-size 20 \
       --ignore-clean \
-      # --raw \
+      --return-tag-voc \
+      --raw \
+      --out-tags $DATA_DIR/evals/test-debug.tags \
       # --gpu \
