@@ -23,6 +23,8 @@ import logging
 
 
 def make_iterator(dataset, args, is_eval=False, max_sentences=None):
+    # Generate batch iterator (with samples sorted by size)
+    # from a GramercoDataset
     with data_utils.numpy_seed(args.seed):
         indices = dataset.ordered_indices()
 
@@ -65,6 +67,7 @@ def make_iterator(dataset, args, is_eval=False, max_sentences=None):
 
 
 def load_data(args, tagger, tokenizer):
+    # Load train, dev, test datasets
     logging.debug("LOADING \t" + args.data_path + ".train")
     train_dataset = make_dataset_from_prefix(
         args.data_path + ".train",
@@ -111,15 +114,17 @@ def load_data(args, tagger, tokenizer):
 
 def train(args, device):
 
+    # init tokenizer
     tokenizer = FlaubertTokenizer.from_pretrained(args.tokenizer)
+    # init tag encoder
     tagger = TagEncoder2(
         path_to_lex=args.path_to_lex,
         path_to_voc=args.path_to_voc
     )
 
+    # init model
     model_id = args.model_id if args.model_id else str(int(time.time()))
     model_id = model_id + "-" + args.model_type
-
     model = GecBertVocModel(
         len(tagger),
         len(tagger.worder),
@@ -144,6 +149,7 @@ def train(args, device):
             "model_{}.pt".format(args.continue_from)
         )
     ):
+        # load parameters from given checkpoint
         logging.info(
             "continue from " +
             os.path.join(
@@ -164,22 +170,22 @@ def train(args, device):
     else:
         model_info = None
 
+    # load data iterators
     train_iter, valid_iter, test_iter = load_data(args, tagger, tokenizer)
 
+    # init criterion
     criterion = CETwoLoss(label_smoothing=args.label_smoothing)
 
     if model_info:
-        num_iter = (model_info["num_iter"] + 1 - 1)
+        num_iter = model_info["num_iter"]
         logging.info("starting from iteration {}".format(num_iter))
     else:
         num_iter = 0
     lr = args.learning_rate / float(args.grad_cumul_iter)
     if num_iter > args.freeze_encoder:
         model.freeze_encoder = False
+    # init optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    # if model_info:
-    #     optimizer.load_state_dict(model_info["optimizer_state_dict"])
-    # logging.debug("learning rate = " + str(lr))
 
     if args.tensorboard:
         writer = SummaryWriter(log_dir=os.path.join(
@@ -206,12 +212,15 @@ def train(args, device):
     optimizer.zero_grad()
 
     for epoch in range(args.n_epochs):
+        # epoch training loop
         logging.debug("EPOCH " + str(epoch))
         train_bs = train_iter.next_epoch_itr(shuffle=True)
         if device == "cuda":
             torch.cuda.empty_cache()
         for batch in tqdm(train_bs):
+            # batch sample
             if num_iter == args.freeze_encoder:
+                # unfreeze encoder paramerters
                 model.freeze_encoder = False
                 optimizer = optim.Adam(model.parameters(), lr=lr)
 
@@ -227,10 +236,8 @@ def train(args, device):
 
             sizes_out = out["attention_mask"].sum(-1)
             sizes_tgt = batch["tag_data"]["attention_mask"].sum(-1)
+            # select only compatible sizes in out vs target
             coincide_mask = sizes_out == sizes_tgt
-
-            # out_tag = out["tag_out"][coincide_mask][out["attention_mask"]
-            #                                     [coincide_mask].bool()]
 
             tgt = batch["tag_data"]["input_ids"]
             # logging.debug("TAGs out = " + str(out.data.argmax(-1)[:20]))
@@ -242,14 +249,8 @@ def train(args, device):
 
             loss = criterion(out, tgt, coincide_mask, batch, tagger,
                              mask_keep_prob=args.random_keep_mask)
-            # sys.exit(8)
             loss.backward()
-            # logging.debug("-"*20)
-            # for p in model.parameters():
-            #     logging.debug(p.data)
-            #     break
-            # logging.debug(optimizer.param_groups[0]["params"][0])
-            # optimizer.step()
+
             if num_iter % args.grad_cumul_iter == 0:
                 optimizer.step()
                 optimizer.zero_grad()
@@ -268,6 +269,7 @@ def train(args, device):
 
             # VALID STEP
             if (num_iter) % args.valid_iter == 0:
+                # valid/save model every args.valid_iter iterations
                 if os.path.isfile(
                     os.path.join(
                         args.save,
@@ -337,7 +339,6 @@ def train(args, device):
                             sizes_tgt = valid_batch["tag_data"]["attention_mask"].sum(-1)
                             coincide_mask = sizes_out == sizes_tgt
 
-                            # out = out["tag_out"]
                             tgt_mask = valid_batch["tag_data"]["attention_mask"][
                                 coincide_mask]
                             tgt_ids = valid_batch["tag_data"]["input_ids"]
@@ -354,7 +355,7 @@ def train(args, device):
                             ].argmax(-1)
                             pred_ids = tagger.tag_word_to_id_vec(pred_voc, pred_tag)
 
-
+                            # Error detection scores
                             ref_dec = ref_tag.ne(0)
                             pred_dec = pred_tag.ne(0)
                             TP += ((pred_dec == ref_dec) &
@@ -367,6 +368,7 @@ def train(args, device):
                             FP += ((pred_dec != ref_dec) & ~
                                    ref_dec).long().sum().item()
 
+                            # Error type scores
                             pred_types = pred_ids.clone().cpu().apply_(
                                 tagger.get_tag_category
                             ).long()
@@ -380,6 +382,7 @@ def train(args, device):
                                 ).long().sum().item()
                                 lens[err_id] += len(pred_types_i)
 
+                            # Word prediction scores
                             for word_tag_id in range(tagger._w_cpt):
                                 tid = word_tag_id + tagger._curr_cpt - tagger._w_cpt
                                 tag_word_cpts[word_tag_id, 0] += (
@@ -401,6 +404,7 @@ def train(args, device):
                             num_iter,
                         )
 
+                        # Store scores in tensorboard
                         recall = TP / (TP + FN)
                         precision = TP / (TP + FP)
 
@@ -437,7 +441,7 @@ def train(args, device):
                             F2_score,
                             num_iter,
                         )
-
+                        # update for early stopping
                         stopper(val_loss)
 
                 # Update best model save if necessary
@@ -451,9 +455,11 @@ def train(args, device):
                             args.save, model.id, "model_best.pt",
                         ),
                     )
+            # test for early stopping
             if stopper and stopper.early_stop:
                 break
             num_iter += 1
+        # test for early stopping
         if stopper and stopper.early_stop:
             break
 

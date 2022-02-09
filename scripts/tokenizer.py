@@ -3,6 +3,8 @@ import re
 
 
 class WordTokenizer:
+    """Composite of subword tokenizer to tokenize at word level.
+    """
     def __init__(self, cls_tokenizer):
         self.subword_tokenizer = cls_tokenizer.from_pretrained(
             "flaubert/flaubert_base_cased"

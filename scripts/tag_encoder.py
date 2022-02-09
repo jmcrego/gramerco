@@ -30,7 +30,10 @@ def default_keep_id():
     return 0
 
 
+# Encoder used to encode tags to integers (long)
 class TagEncoder:
+    """Tag Encoder compatible with GecBertModel and GecBert2DecisionsModel.
+    """
     def __init__(
             self,
             path_to_lex="/home/bouthors/workspace/gramerco-repo/gramerco/resources/Lexique383.tsv",
@@ -113,6 +116,7 @@ class TagEncoder:
                 self.add_tag("$" + pos + "_" + tok)
 
     def encode_line(self, line):
+        # Method used in processing for encoding + binarization w/ fairseq.
         return torch.tensor(
             list(map(self.tag_to_id, line.split(" "))), dtype=torch.int64)
 
@@ -128,13 +132,12 @@ class TagEncoder:
         self._curr_cpt += 1
 
     def get_tag_category(self, tag):
+        # Method to retrieve tag category (error type) for any tag/tag id.
         if isinstance(tag, int):
-            # logging.debug(str(tag))
             tag = self.id_to_tag(tag)
         error_type = tag[1:].split('_')[0]
         if error_type in ["ART", "PRO", "PRE", "ADV"]:
             error_type = "REPLACE"
-        # logging.debug(error_type + "   :   " + tag)
         # DELETE, COPY, SWAP, SPLIT, HYPHEN, CASE, TRANSFORM, APPEND, REPLACE
         if error_type in self.error_type_id:
             return self.error_type_id[error_type]
@@ -148,19 +151,24 @@ class TagEncoder:
 
 
 class TagEncoder2(TagEncoder):
-
+    """Tag Encoder compatible with GecBertVocModel.
+    For each tag ($DELETE, $INFLECT:inflection, $REPLACE:SPELL_word)
+    is associated a unique id.
+    This id can be decomposed in two distinct ids : error type and word.
+    """
     def __init__(
             self,
             path_to_lex="/nfs/RESEARCH/bouthors/projects/gramerco/resources/Lexique383.tsv",
             path_to_voc="/nfs/RESEARCH/bouthors/projects/gramerco/resources/common/french.dic.20k",
+            new_version=False,
     ):
 
         rep = read_rep(path_to_lex)
         voc = read_app(path_to_voc)
         self.worder = WordEncoder(path_to_voc)
 
-        self._id_to_tag = defaultdict(default_keep_tok)
-        self._tag_to_id = defaultdict(default_keep_id)
+        self._id_to_tag = defaultdict(default_keep_tok) # only for error type
+        self._tag_to_id = defaultdict(default_keep_id) # only for error type
         self._curr_cpt = 1
         self._w_cpt = 0
 
@@ -182,21 +190,16 @@ class TagEncoder2(TagEncoder):
             "SPLIT",  # word
         ]
 
+        if new_version:
+            self.id_error_type.append(
+                "$REPLACE:SAMEPOS",  # word
+            )            
+
         self.error_type_id = {
             key: i for i, key in enumerate(self.id_error_type)
         }
         for error in self.id_error_type[1:-6]:
             self.add_tag("$" + error)
-        # self.add_tag("$DELETE")
-        # self.add_tag("$COPY")
-        # self.add_tag("$SWAP")
-        # # self.add_tag("$SPLIT")
-        # self.add_tag("$MERGE")
-        # self.add_tag("$SPLIT_HYPHEN")
-        # self.add_tag("$MERGE_HYPHEN")
-        # self.add_tag("$CASE")
-        # self.add_tag("$CASE_UPPER")
-        # self.add_tag("$CASE_LOWER")
 
         with open(
             "/nfs/RESEARCH/bouthors/projects/gramerco/resources/common/morphs-tag.txt",
@@ -221,6 +224,8 @@ class TagEncoder2(TagEncoder):
         if i < self.size() - self._w_cpt:
             return self._id_to_tag[i]
         j = i - self._curr_cpt + self._w_cpt
+
+        # decomposition in error_type/word ids
         tag = j // len(self.worder)
         word = j % len(self.worder)
 
@@ -231,6 +236,7 @@ class TagEncoder2(TagEncoder):
         )
 
     def tag_word_to_id(self, word_id, tag_id):
+        # recompose error_type/word id in global tag id.
         if tag_id >= self._curr_cpt - self._w_cpt:
             return (
                 self._curr_cpt - self._w_cpt +
@@ -240,6 +246,8 @@ class TagEncoder2(TagEncoder):
         return tag_id
 
     def tag_word_to_id_vec(self, word_id, tag_id):
+        # recompose error_type/words id in global tag ids.
+        # But compatible with tensors!
         ids = tag_id.clone()
         mask = (tag_id >= self._curr_cpt - self._w_cpt)
         ids[mask] = (
@@ -250,6 +258,7 @@ class TagEncoder2(TagEncoder):
         return ids
 
     def tag_to_id(self, tag):
+        # convert string tag to tag id
         if self.is_word_tag(tag):
             tags = tag.split('_')
             word = tags[-1].rstrip('\n')
@@ -267,11 +276,14 @@ class TagEncoder2(TagEncoder):
         return self._tag_to_id[tag]
 
     def id_to_tag_id(self, i):
+        # extract error_type id from id
         if i < self.size() - self._w_cpt:
             return i
         return self.size() - ((i - self.size() + self._w_cpt) // len(self.worder)) - 1
 
     def id_to_tag_id_vec(self, x):
+        # extract error_type id from id
+        # But compatible with tensors!
         y = x.clone()
         mask = (x >= (self.size() - self._w_cpt))
         y[mask] = (
@@ -286,15 +298,15 @@ class TagEncoder2(TagEncoder):
         return y
 
     def id_to_word_id(self, i):
+        # extract word id from id
         if i < self.size() - self._w_cpt:
             # not APPEND, REPLACE, SPLIT
             return -1
-        # if i >= self.size() - self._w_cpt + (self._w_cpt - 1) * len(self.worder):
-        #     # APPEND
-        #     return -1
         return ((i - self.size() + self._w_cpt) % len(self.worder))
 
     def id_to_word_id_vec(self, x):
+        # extract word id from id
+        # But compatible with tensors!
         y = x.new(x.shape).fill_(-1)
         mask = (x >= (self.size() - self._w_cpt))
         y[mask] = (
@@ -306,14 +318,11 @@ class TagEncoder2(TagEncoder):
         return y
 
     def encode_line(self, line):
+        # method used to encode + binarize tags in preprocessing
         return torch.tensor(
             list(map(self.tag_to_id, line.split(" "))), dtype=torch.int64)
 
     def is_word_tag(self, tag):
-        # return (tag.startswith("$APPEND")
-        #         or tag.startswith("$REPLACE")
-        #         or (tag == "$SPLIT")
-        #         )
         return '_' in tag
 
     def is_radical_word_tag(self, tag):
@@ -336,7 +345,6 @@ class TagEncoder2(TagEncoder):
 
     def get_tag_category(self, tag):
         if isinstance(tag, int):
-            # logging.info("int tag id  :::: " + str(tag))
             tag = self.id_to_tag(tag)
         if self.is_word_tag(tag):
             error_type = tag[1:].split('_')[0]
@@ -349,16 +357,22 @@ class TagEncoder2(TagEncoder):
 
     def get_tag_category_pure(self, tag):
         cat = self.get_tag_category(tag)
-        # TODO ?
         return cat
 
+    @property
+    def infer_ids(self):
+        return [
+            i for i in self._id_to_tag
+            if self._id_to_tag[i].startswith("$INFLECT")
+        ]
 
     def get_num_encodable(self):
         return self.size() + self._w_cpt * (len(self.worder) - 1)
 
 
 class WordEncoder:
-
+    """Encoder combined with TagEncoder2 to uniquely encode words
+    from a given word dictionary."""
     def __init__(
         self,
         path_to_voc="/nfs/RESEARCH/bouthors/projects/gramerco/resources/common/french.dic.20k",

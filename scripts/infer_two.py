@@ -115,55 +115,68 @@ def read_lexicon(f, vocab):
 
 
 def inflect_tag_to_dict(tag):
-    d = {e.split('=')[0]: e.split('=')[1] for e in tag.split(';')[1:]}
+    try:
+        d = {e.split('=')[0]: e.split('=')[1] for e in tag.split(';')[1:]}
+    except:
+        logging.info(tag)
     d["POS"] = tag.split(';')[0]
     return d
 
 
-def get_idx_from_possibilities(tagger, possibilities):
+def get_idx_from_possibilities(tagger, possibilities, voc_best=None):
+    if voc_best is not None:
+        words = [tagger.worder.id_to_word[i] for i in voc_best.numpy()]
+    else:
+        words = tagger.worder.word_to_id
     ids = [
-        tagger.worder.word_to_id[word] for word in possibilities
-        if word in tagger.worder.word_to_id
+        tagger.worder.word_to_id[word]
+        for word in possibilities
+        if word in words
     ]
-    # logging.info(str(ids))
     return torch.tensor(ids, dtype=torch.int64)
 
 
-def get_homophone_idx(word, lex, tagger):
+def get_homophone_idx(word, lex, tagger, voc_best=None):
     possibilities = lex["homophones"][word]
-    return get_idx_from_possibilities(tagger, possibilities)
+    return get_idx_from_possibilities(tagger, possibilities, voc_best=voc_best)
 
 
-def get_spell_idx(word, tagger):
+def get_spell_idx(word, tagger, voc_best=None):
     l = len(word)
+    if voc_best is not None:
+        candidates = [
+            tagger.worder.id_to_word[i.item()]
+            for i in voc_best
+        ]
+    else:
+        candidates = tagger.worder.word_to_id.keys()
     possibilities = [
-        candidate for candidate in tagger.worder.word_to_id.keys()
+        candidate for candidate in candidates
         if difflib.SequenceMatcher(None, word, candidate).ratio() > 0.75
-        or (l < 4
+        or (
+            l < 4
             and abs(len(word) - len(candidate)) <= 1
-            and difflib.SequenceMatcher(None, word, candidate).ratio() > 0.45)
+            and difflib.SequenceMatcher(None, word, candidate).ratio() > 0.45
+        )
     ]
-    # possibilities = [
-    #     candidate for candidate in tagger.worder.word_to_id.keys()
-    #     if Levenshtein.distance(word, candidate) <= (math.sqrt(len(word)) * 0.9)
-    # ]
-    #
-    # logging.info(str([
-    #     Levenshtein.distance(word, candidate) for candidate in possibilities
-    # ]))
-
-    # logging.info(possibilities)
-    return get_idx_from_possibilities(tagger, possibilities)
+    return get_idx_from_possibilities(tagger, possibilities, voc_best=voc_best)
 
 
-def get_inflection_idx(word, lex, tagger):
+def get_inflection_idx(word, lex, tagger, voc_best=None):
     possibilities = lex["common_lemma"][word]
-    return get_idx_from_possibilities(tagger, possibilities)
+    return get_idx_from_possibilities(tagger, possibilities, voc_best=voc_best)
 
 
-def get_prefix_idx(word, tagger):
+def get_prefix_idx(word, tagger, voc_best=None):
+    if voc_best is not None:
+        candidates = [
+            tagger.worder.id_to_word[i.item()]
+            for i in voc_best
+        ]
+    else:
+        candidates = tagger.worder.word_to_id.keys()
     possibilities = [
-        candidate for candidate in tagger.worder.word_to_id.keys()
+        candidate for candidate in candidates
         if word.startswith(candidate)
     ]
     return get_idx_from_possibilities(tagger, possibilities)
@@ -285,8 +298,11 @@ def get_tags_vocs_from_proposals(
         device=voc_out.device,
     )
     new_inflections = dict()
-    # logging.info("len = " + str(len(toks)))
-    # logging.info(str([tagger._id_to_tag[e.item()] for e in tag_proposals[:, 0] if e.item() != 0]))
+
+    if args.k_best > 0:
+        _, voc_k_best = torch.topk(voc_out, args.k_best, dim=-1)
+    else:
+        voc_k_best = [None] * len(toks)
     for i in range(len(toks)):
         can_move_on = False
         j = 0
@@ -297,44 +313,30 @@ def get_tags_vocs_from_proposals(
             if tag.startswith("$REPLACE"):
                 idx = None
                 if tag.startswith("$REPLACE:HOMOPHONE"):
-                    idx = get_homophone_idx(toks[i], lex, tagger)
+                    idx = get_homophone_idx(
+                        toks[i], lex, tagger,
+                        voc_best=voc_k_best[i]
+                    )
                 elif tag.startswith("$REPLACE:SPELL"):
-                    idx = get_spell_idx(toks[i], tagger)
+                    idx = get_spell_idx(
+                        toks[i], tagger,
+                        voc_best=voc_k_best[i],
+                    )
                 elif tag.startswith("$REPLACE:INFLECTION"):
-                    idx = get_inflection_idx(toks[i], lex, tagger)
+                    idx = get_inflection_idx(
+                        toks[i], lex, tagger,
+                        voc_best=voc_k_best[i]
+                    )
                 if idx is not None and idx.any():
-                    # logging.info(str(idx.cpu().numpy()))
                     can_move_on = True
-                    # word = tagger.worder.id_to_word[
-                    #     idx[voc_out[i][idx].argmax(-1)].item()
-                    # ]
-                    if tag.startswith("$REPLACE:SPELL"):
-                        logging.info("[" + ", ".join(
-                            tagger.worder.id_to_word[i.item()]
-                            for i in idx
-                        ) + "]")
-                        logging.info(
-                            toks[i]
-                            + "\t>>>>\t"
-                            + tagger.worder.id_to_word[
-                                voc_out[i].argmax(-1).item()
-                            ]
-                            + "\t|\t"
-                            + tagger.worder.id_to_word[
-                                idx[voc_out[i][idx].argmax(-1)].item()
-                            ]
-                        )
                     new_voc[i] = idx[voc_out[i][idx].argmax(-1)]
             elif tag.startswith("$SPLIT"):
-                idx = get_prefix_idx(toks[i], tagger)
+                idx = get_prefix_idx(
+                    toks[i], tagger,
+                    voc_best=voc_k_best[i]
+                )
                 if idx is not None and idx.nelement():
-                    # logging.info(str(idx.cpu().numpy()))
                     can_move_on = True
-                    # logging.info("b###  " + str(tagger.worder.id_to_word[voc_out[i].argmax(-1).item()]))
-                    # word = tagger.worder.id_to_word[
-                    #     idx[voc_out[i][idx].argmax(-1)].item()
-                    # ]
-                    # logging.info("a|||  " + str(word))
                     new_voc[i] = idx[voc_out[i][idx].argmax(-1)]
 
             elif tag.startswith("$INFLECT"):
@@ -351,7 +353,6 @@ def get_tags_vocs_from_proposals(
 
             j += 1
 
-        # logging.info("################" + str(tag_proposals[i, j-1].item()))
         new_tag[i] = tag_proposals[i, j-1]
 
     return new_tag, new_voc, new_inflections
@@ -365,7 +366,7 @@ def apply_tags(
     tagger: TagEncoder2,
     args,
 ):
-    new_tokens = list()
+    new_toks = list()
     order_edits = dict()
     for i in range(len(toks)):
         tag = tagger._id_to_tag[tags[i].item()]
@@ -391,7 +392,7 @@ def apply_tags(
             elif "$APPEND" in tag:
                 new_toks.append(toks[i])
                 new_toks.append(tagger.worder.id_to_word[
-                    voc[i].item()
+                    vocs[i].item()
                 ])
             elif tag == "$DELETE" or tag == "$COPY":
                 pass
@@ -436,15 +437,15 @@ def apply_tags(
             else:
                 raise ValueError("Tag not recognized :" + tag)
 
-    for i in range(len(new_tokens) - 1):
-        if i in new_order:
-            if new_order[i] == "$SWAP":
-                new_tokens[i], new_tokens[i+1] = new_tokens[i+1], new_tokens[i]
-            elif new_order[i] == "$MERGE":
-                new_tokens[i], new_tokens[i+1] = '', new_tokens[i] + new_tokens[i+1]
-            elif new_order[i] == "$HYPHEN:MERGE":
-                new_tokens[i], new_tokens[i+1] = '', new_tokens[i] + '-' + new_tokens[i+1]
-    new_tokens = [t for t in new_tokens if t != '']
+    for i in range(len(new_toks) - 1):
+        if i in order_edits:
+            if order_edits[i] == "$SWAP":
+                new_toks[i], new_toks[i+1] = new_toks[i+1], new_toks[i]
+            elif order_edits[i] == "$MERGE":
+                new_toks[i], new_toks[i+1] = '', new_toks[i] + new_toks[i+1]
+            elif order_edits[i] == "$HYPHEN:MERGE":
+                new_toks[i], new_toks[i+1] = '', new_toks[i] + '-' + new_toks[i+1]
+    new_toks = [t for t in new_toks if t != '']
 
 
     # if args.out_tags:
@@ -915,6 +916,12 @@ if __name__ == "__main__":
         '--model-id',
         required=True,
         help="Model id (folder name)"
+    )
+    parser.add_argument(
+        '--k-best',
+        type=int,
+        default=-1,
+        help='restrict to k-best words'
     )
     parser.add_argument(
         '--lex',

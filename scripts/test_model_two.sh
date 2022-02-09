@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Script for evaluating model_two architectures
+
 source ~/anaconda3/bin/activate gramerco
 
 DATA_DIR=../resources
@@ -24,6 +26,7 @@ python test_model_two.py \
       --sample 1000000 \
       --log DEBUG \
       --model-iter -1 \
+      --k-best 1 \
       --save $SAVE_PATH \
       --model-id freeze20k+ls0.2+cumul4+rdm0.5-normal1 \
       --lex $DATA_DIR/Lexique383.tsv \
@@ -33,5 +36,5 @@ python test_model_two.py \
       --ignore-clean \
       --return-tag-voc \
       --raw \
-      --out-tags $DATA_DIR/evals/test-debug.tags \
+      --out-tags $DATA_DIR/evals/test-constraint.tags \
       # --gpu \

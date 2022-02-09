@@ -19,6 +19,8 @@ except BaseException:
 
 
 class GecBertModel(nn.Module):
+    """Base Gec Model with 1 final layer for all possible tags.
+    """
     def __init__(
         self,
         num_tag,
@@ -68,21 +70,28 @@ class GecBertModel(nn.Module):
         word_ends[:, 0] = 0
         return torch.cumsum(word_ends, -1)
 
-    def forward(self, **inputs):
+    def forward_encoder(self, **inputs):
         if self.freeze_encoder:
             with torch.no_grad():
                 h = self.encoder(**inputs)
         else:
             h = self.encoder(**inputs)
-
+        # index tokens indicating how to group them into words.
         word_index = self._generate_word_index(
             inputs["input_ids"]).to(h.last_hidden_state.device)
 
+        # agregate encoding states according to the word indexing.
         h_w = word_collate(h.last_hidden_state, word_index)
-
+        # adapt the output attention mask to update padding.
         attention_mask_larger = word_collate(
             inputs["attention_mask"].unsqueeze(-1), word_index, agregation="max"
         ).squeeze(-1)
+        return h, h_w, attention_mask_larger
+
+
+    def forward(self, **inputs):
+        h, h_w, attention_mask_larger = self.forward_encoder(**inputs)
+
         attention_mask = torch.zeros_like(
             attention_mask_larger).to(h.last_hidden_state.device)
         attention_mask[:, 1:-1] = attention_mask_larger[:, 2:]
@@ -100,6 +109,10 @@ class GecBertModel(nn.Module):
 
 
 class GecBert2DecisionsModel(GecBertModel):
+    """Gec Model with 2 final layers.
+    One for keep/error detection.
+    One for tag preditcion along all possible tags.
+    """
 
     def __init__(
         self,
@@ -120,20 +133,8 @@ class GecBert2DecisionsModel(GecBertModel):
             self.dropout_dec_layer = None
 
     def forward(self, **inputs):
-        if self.freeze_encoder:
-            with torch.no_grad():
-                h = self.encoder(**inputs)
-        else:
-            h = self.encoder(**inputs)
+        h, h_w, attention_mask_larger = self.forward_encoder(**inputs)
 
-        word_index = self._generate_word_index(
-            inputs["input_ids"]).to(h.last_hidden_state.device)
-
-        h_w = word_collate(h.last_hidden_state, word_index)
-
-        attention_mask_larger = word_collate(
-            inputs["attention_mask"].unsqueeze(-1), word_index, agregation="max"
-        ).squeeze(-1)
         attention_mask = torch.zeros_like(
             attention_mask_larger).to(h.last_hidden_state.device)
         attention_mask[:, 1:-1] = attention_mask_larger[:, 2:]
@@ -147,7 +148,8 @@ class GecBert2DecisionsModel(GecBertModel):
         return {
             "tag_out": out,
             "decision_out": out_decision,
-            "attention_mask": attention_mask}
+            "attention_mask": attention_mask,
+        }
 
     def parameters(self):
         if self.freeze_encoder:
@@ -156,6 +158,11 @@ class GecBert2DecisionsModel(GecBertModel):
 
 
 class GecBertVocModel(GecBertModel):
+    """Gec Model with 2 final layers.
+    One for error type tag prediction (including all inflections).
+    One for word prediction on a given vocabulary
+    of tens of thousands of words.
+    """
     def __init__(
         self,
         num_tag,
@@ -164,23 +171,12 @@ class GecBertVocModel(GecBertModel):
     ):
         super(GecBertVocModel, self).__init__(num_tag, **kwargs)
         h_size = self.encoder.attentions[0].out_lin.out_features
+        # Linear layer of vocabulary
         self.voc_layer = nn.Linear(h_size, num_voc)
 
     def forward(self, **inputs):
-        if self.freeze_encoder:
-            with torch.no_grad():
-                h = self.encoder(**inputs)
-        else:
-            h = self.encoder(**inputs)
+        h, h_w, attention_mask_larger = self.forward_encoder(**inputs)
 
-        word_index = self._generate_word_index(
-            inputs["input_ids"]).to(h.last_hidden_state.device)
-
-        h_w = word_collate(h.last_hidden_state, word_index)
-
-        attention_mask_larger = word_collate(
-            inputs["attention_mask"].unsqueeze(-1), word_index, agregation="max"
-        ).squeeze(-1)
         attention_mask = torch.zeros_like(
             attention_mask_larger).to(h.last_hidden_state.device)
         attention_mask[:, 1:-1] = attention_mask_larger[:, 2:]

@@ -3,7 +3,8 @@ import logging
 
 
 class CrossEntropyLoss(torch.nn.Module):
-
+    """Loss compatible with GecBertModel.
+    """
     def __init__(self, label_smoothing=0.0):
         super(CrossEntropyLoss, self).__init__()
         self.ce = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
@@ -26,7 +27,8 @@ class CrossEntropyLoss(torch.nn.Module):
 
 
 class DecisionLoss(torch.nn.Module):
-
+    """Loss Compatible with GecBert2DecisionsModel.
+    """
     def __init__(self, label_smoothing=0.0, beta=0.1):
         super(DecisionLoss, self).__init__()
         self.ce = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
@@ -38,14 +40,6 @@ class DecisionLoss(torch.nn.Module):
         att_mask_out = out["attention_mask"][mask].bool()
         att_mask_in = x["tag_data"]["attention_mask"][mask].bool()
 
-        # logging.debug("attention mask in " + str(att_mask_in[:4].long()))
-        # logging.debug("attention mask in " + str(att_mask_in[:4].long().sum(-1)))
-        # logging.debug("attention mask out " + str(att_mask_out[:4].long()))
-        # logging.debug("attention mask out " + str(att_mask_out[:4].long().sum(-1)))
-        # logging.debug("tgt " + str(tgt[mask][:5]))
-        #
-        # logging.debug("out = " + str(out["decision_out"][mask][att_mask_out][:20]))
-        # logging.debug("tgt = " + str(tgt[mask][att_mask_in].bool().long()[:20]))
         y = out["decision_out"][mask][att_mask_out]
         t = tgt[mask][att_mask_in].bool().long()
         mask_final = t.ne(0) | (
@@ -67,15 +61,13 @@ class DecisionLoss(torch.nn.Module):
         if not error_mask.any():
             loss_tag = torch.zeros_like(loss_tag)
         else:
-            # logging.info(out["decision_out"][mask][att_mask_out].shape)
-            # logging.info(tgt[mask][att_mask_in].bool().long().shape)
-            # logging.info(tgt[mask][att_mask_in].bool().long())
             ...
         return loss_decision + self.beta * loss_tag
 
 
 class CompensationLoss(torch.nn.Module):
-
+    """Loss compatible with GecBertModel.
+    """
     def __init__(self, label_smoothing=0.0):
         super(CompensationLoss, self).__init__()
         self.ce = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
@@ -99,7 +91,9 @@ class CompensationLoss(torch.nn.Module):
         return loss_decision + loss_tag
 
 class CETwoLoss(torch.nn.Module):
-
+    """Loss compatible with GecBertVocModel.
+    Performs cross entropy loss on the predictions of the last layers.
+    """
     def __init__(self, label_smoothing=0.0, beta=1.):
         super(CETwoLoss, self).__init__()
         self.ce = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
@@ -111,14 +105,6 @@ class CETwoLoss(torch.nn.Module):
         att_mask_out = out["attention_mask"][mask].bool()
         att_mask_in = x["tag_data"]["attention_mask"][mask].bool()
 
-        # logging.debug("attention mask in " + str(att_mask_in[:4].long()))
-        # logging.debug("attention mask in " + str(att_mask_in[:4].long().sum(-1)))
-        # logging.debug("attention mask out " + str(att_mask_out[:4].long()))
-        # logging.debug("attention mask out " + str(att_mask_out[:4].long().sum(-1)))
-        # logging.debug("tgt " + str(tgt[mask][:5]))
-        #
-        # logging.debug("out = " + str(out["decision_out"][mask][att_mask_out][:20]))
-        # logging.debug("tgt = " + str(tgt[mask][att_mask_in].bool().long()[:20]))
         y_tag = out["tag_out"][mask][att_mask_out]
         y_word = out["tag_out"][mask][att_mask_out]
         t = tgt[mask][att_mask_in].long()

@@ -127,6 +127,8 @@ def test(args):
     ref_tags_tot = list()
     ids_ref_tot = list()
     tag_word_cpts = np.zeros((tagger._w_cpt, 2))
+    inflect_ids = np.array(tagger.infer_ids)
+    inflect_acc = np.zeros((len(inflect_ids), 2))
     if args.raw:
         for i in tqdm(range(len(txt_src) // args.batch_size + 1)):
             # if i == 5:
@@ -180,41 +182,8 @@ def test(args):
                             return_corrected=args.num_iter > 1,
                         )
                         tag_ids, voc_ids = res["tags"], res["vocs"]
-                        if args.num_iter > 1:
-                            batch_txt[k] = res["text"]
-
-                        # split_id = tagger._tag_to_id["$SPLIT"]
-                        # spl = (tag_ids_ == split_id)
-                        # if spl.any():
-                        #     logging.info("SPLIT before \t >>> "
-                        #         + str(tag_ids_[spl].cpu().numpy()) + "\t"
-                        #         + str(voc_ids_[spl].cpu().numpy()))
-                        #     logging.info("SPLIT after \t >>> "
-                        #         + str(tag_ids[spl].cpu().numpy()) + "\t"
-                        #         + str(voc_ids[spl].cpu().numpy()))
-                        # batch_txt[k] = ""
-                        # if len(voc_ids) == len(voc_ids_):
-                        #     diff = voc_ids[voc_ids != voc_ids_]
-                        #     if diff.numel() > 0:
-                        #         logging.info("%" + str(voc_ids_[voc_ids != voc_ids_].cpu().numpy()))
-                        #         logging.info("@" + str(voc_ids[voc_ids != voc_ids_].cpu().numpy()))
 
                         ids = tagger.tag_word_to_id_vec(voc_ids, tag_ids)
-
-                        # seg_sent = word_tokenizer.tokenize(t.rstrip('\n'), max_length=510)
-                        #
-                        # tags = [tagger._id_to_tag[i.item()] for i in tag_ids]
-                        # vocs = [tagger.worder.id_to_word[i.item()]
-                        #     if i >= 0 else ''
-                        #     for i in voc_ids]
-                        #
-                        # for i, tag in enumerate(tags):
-                        #     logging.info("is radical " + tag + " " + str(tagger.is_radical_word_tag(tag)) + "  " + vocs[i])
-                        #     if tagger.is_radical_word_tag(tag):
-                        #         tags[i] = tag + '_' + vocs[i]
-                        #
-                        # logging.info(' '.join(txt + '|' + tag for txt, tag in zip(seg_sent, tags)))
-                        # sys.exit(8)
 
                         ref_ids = torch.tensor([
                             tagger.tag_to_id(tag)
@@ -229,6 +198,20 @@ def test(args):
                         # logging.info("voc >>> " + str(voc_ids[voc_ids.ne(-1)].cpu().long().numpy()))
 
                         if len(tag_ids) != len(ref_tag_ids):
+                            logging.info("-" * 152)
+                            logging.info(">>> " + t)
+                            logging.info(
+                                " ".join(
+                                    word_tokenizer.tokenize(
+                                        t.rstrip('\n'),
+                                        max_length=510
+                                    )
+                                )
+                            )
+                            logging.info("=== " + " ".join(
+                                tagger.id_to_tag(rid.item())
+                                for rid in ref_ids
+                            ))
                             # logging.info(
                             #     "tag ids diff >>> "
                             #     + str(i * args.batch_size + k)
@@ -242,6 +225,9 @@ def test(args):
                         if len(ids) != len(ref_ids):
                             # logging.info("tot ids diff >>> " + str(i * args.batch_size + k))
                             continue
+
+                        if args.num_iter > 1:
+                            batch_txt[k] = res["text"]
                         # ref_tags.append(tag_ids)
                         # pred_tags.append(ref_tag_ids)
                         pred = tag_ids.ne(0)
@@ -278,13 +264,6 @@ def test(args):
                         for word_tag_id in range(tagger._w_cpt):
                             tid = word_tag_id + tagger._curr_cpt - tagger._w_cpt
                             # 195 194 193 192 191 ....
-                            # logging.info(str(type(tag_ids)))
-                            # logging.info(str(type(ref_tag_ids)))
-                            # logging.info(str(type(ref_tag_ids == tid)))
-                            # logging.info(str(type(tag_ids[ref_tag_ids == tid] == tid)))
-                            # logging.info(str((
-                            #     tag_ids[ref_tag_ids == tid] == tid
-                            # ).long().sum().item()))
                             mask_voc = (
                                 (ref_tag_ids == tid)
                                 & voc_ids.ne(-1)
@@ -297,6 +276,16 @@ def test(args):
                             tag_word_cpts[word_tag_id, 1] += (
                                 mask_voc
                             ).long().sum().item()
+
+                        for ii in range(len(inflect_ids)):
+                            tid = inflect_ids[ii]
+                            mask_voc = (ref_tag_ids == tid)
+                            inflect_acc[ii, 0] += (
+                                tag_ids[mask_voc] == tid
+                            ).long().sum().item()
+                            inflect_acc[ii, 1] += (
+                                mask_voc
+                            ).long().sum().item()
     else:
         for i, test_batch in enumerate(tqdm(test_iter.next_epoch_itr(shuffle=False))):
 
@@ -305,14 +294,7 @@ def test(args):
                     test_batch["noise_data"]["attention_mask"][k].bool()
                 ]
                 xi = " ".join(map(tokenizer._convert_id_to_token, xi.cpu().numpy()))
-                # logging.info("noise >>> " + xi)
-                # logging.info(str(test_batch["noise_data"]["input_ids"][k][
-                #     test_batch["noise_data"]["attention_mask"][k].bool()
-                # ].cpu().numpy()))
-            # sys.exit(0)
-            # if i > 5:
-            #     break
-            # logging.info(toks["input_ids"].shape)
+
             dec = list()
             with torch.no_grad():
                 if args.gpu:
@@ -346,7 +328,6 @@ def test(args):
                     ]
                 )
                 # logging.info(t)
-
 
                 res = apply_tags_with_constraint(
                     t,
@@ -409,13 +390,6 @@ def test(args):
 
                 for word_tag_id in range(tagger._w_cpt):
                     tid = word_tag_id + tagger._curr_cpt - tagger._w_cpt
-                    # logging.info(str(type(tag_ids)))
-                    # logging.info(str(type(ref_tag_ids)))
-                    # logging.info(str(type(ref_tag_ids == tid)))
-                    # logging.info(str(type(tag_ids[ref_tag_ids == tid] == tid)))
-                    # logging.info(str((
-                    #     tag_ids[ref_tag_ids == tid] == tid
-                    # ).long().sum().item()))
                     tag_word_cpts[word_tag_id, 0] += (
                         tag_ids[ref_tag_ids == tid] == tid
                     ).long().sum().item()
@@ -423,10 +397,6 @@ def test(args):
                         ref_tag_ids == tid
                     ).long().sum().item()
 
-    # pts = np.array([len(pt) for pt in pred_tags])
-    # rts = np.array([len(pt) for pt in ref_tags])
-    # print(pts[pts != rts])
-    # print(rts[pts != rts])
     pred_tags = torch.cat(pred_tags).cpu()
     ref_tags = torch.cat(ref_tags).cpu()
     ref_tags_tot = torch.cat(ref_tags_tot).cpu()
@@ -460,6 +430,44 @@ def test(args):
         logging.info(
             tagger._id_to_tag[tid] + " word acc = " +
             str(tag_word_cpts[i, 0] / tag_word_cpts[i, 1])
+        )
+
+    inflect_mask = inflect_acc[:, 1] > 0
+
+    logging.info(
+        "mean $INFLECT acc = " +
+        str(
+            np.average(
+                inflect_acc[:, 0][inflect_mask]
+                / inflect_acc[:, 1][inflect_mask],
+                weights=inflect_acc[:, 1][inflect_mask]
+            ).item()
+        )
+    )
+
+    logging.info(
+        "mean $INFLECT class acc = " +
+        str(
+            (inflect_acc[:, 0][inflect_mask]
+            / inflect_acc[:, 1][inflect_mask]
+        ).mean().item())
+    )
+
+    acc_infls = inflect_acc[:, 0][inflect_mask] / inflect_acc[:, 1][inflect_mask]
+
+    sorted_inflect_idx = np.argsort(acc_infls)
+    sorted_inflect_ids = inflect_ids[inflect_mask][sorted_inflect_idx]
+
+    for i in range(min(50, len(acc_infls))):
+        logging.info(
+            str(i) + "-th worst: "
+            + tagger._id_to_tag[sorted_inflect_ids[i]] + "\t\t\t acc = "
+            + str(
+                acc_infls[sorted_inflect_idx][i]
+            ) + "\t\t"
+            + str(
+                inflect_acc[:, 1][inflect_mask][sorted_inflect_idx][i]
+            )
         )
 
     # pred_error_types = (pred_tags[ref_tags.ne(0)] +
@@ -682,6 +690,12 @@ if __name__ == "__main__":
         default=16,
         type=int,
         help='number of workers for data fetching',
+    )
+    parser.add_argument(
+        '--k-best',
+        type=int,
+        default=-1,
+        help='restrict to k-best words'
     )
     parser.add_argument(
         '--ignore-clean',
