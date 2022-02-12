@@ -30,6 +30,7 @@ class GecBertModel(nn.Module):
         mid=None,
         freeze_encoder=False,
         dropout=0.,
+        word_index=False,
     ):
         super(GecBertModel, self).__init__()
 
@@ -47,6 +48,7 @@ class GecBertModel(nn.Module):
             self.dropout_layer = None
         self.id = mid
         self.freeze_encoder = freeze_encoder
+        self.word_index = word_index
 
     def _tokenize_text(self, texts):
         return self.tokenizer(texts, return_tensors="pt", padding=True)
@@ -71,14 +73,21 @@ class GecBertModel(nn.Module):
         return torch.cumsum(word_ends, -1)
 
     def forward_encoder(self, **inputs):
+        inputs_encoder = {
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs["attention_mask"],
+        }
         if self.freeze_encoder:
             with torch.no_grad():
-                h = self.encoder(**inputs)
+                h = self.encoder(**inputs_encoder)
         else:
-            h = self.encoder(**inputs)
+            h = self.encoder(**inputs_encoder)
         # index tokens indicating how to group them into words.
-        word_index = self._generate_word_index(
-            inputs["input_ids"]).to(h.last_hidden_state.device)
+        if self.word_index:
+            word_index = inputs["word_index"]
+        else:
+            word_index = self._generate_word_index(
+                inputs["input_ids"]).to(h.last_hidden_state.device)
 
         # agregate encoding states according to the word indexing.
         h_w = word_collate(h.last_hidden_state, word_index)
@@ -87,7 +96,6 @@ class GecBertModel(nn.Module):
             inputs["attention_mask"].unsqueeze(-1), word_index, agregation="max"
         ).squeeze(-1)
         return h, h_w, attention_mask_larger
-
 
     def forward(self, **inputs):
         h, h_w, attention_mask_larger = self.forward_encoder(**inputs)

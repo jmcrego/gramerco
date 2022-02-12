@@ -189,16 +189,18 @@ class TagEncoder2(TagEncoder):
             "REPLACE:SPELL",  # word
             "SPLIT",  # word
         ]
+        num_word_tags = 5
 
         if new_version:
             self.id_error_type.append(
-                "$REPLACE:SAMEPOS",  # word
-            )            
+                "REPLACE:SAMEPOS",  # word
+            )
+            num_word_tags = num_word_tags + 1
 
         self.error_type_id = {
             key: i for i, key in enumerate(self.id_error_type)
         }
-        for error in self.id_error_type[1:-6]:
+        for error in self.id_error_type[1:-num_word_tags-1]:
             self.add_tag("$" + error)
 
         with open(
@@ -208,11 +210,8 @@ class TagEncoder2(TagEncoder):
             for line in f.readlines():
                 self.add_tag("$INFLECT:" + line.rstrip('\n'))
 
-        self.add_tag("$APPEND", word=True)
-        self.add_tag("$REPLACE:INFLECTION", word=True)
-        self.add_tag("$REPLACE:HOMOPHONE", word=True)
-        self.add_tag("$REPLACE:SPELL", word=True)
-        self.add_tag("$SPLIT", word=True)
+        for error in self.id_error_type[-num_word_tags:]:
+            self.add_tag("$" + error, word=True)
 
     def add_tag(self, tag, word=False):
         self._id_to_tag[self._curr_cpt] = tag
@@ -398,12 +397,12 @@ class WordEncoder:
 
 if __name__ == "__main__":
 
-    tagger = TagEncoder2()
+    tagger = TagEncoder2(new_version=True)
 
     from noiser.Noise import Lexicon
     lexicon = Lexicon("../resources/Lexique383.tsv")
 
-    txt = """$HYPHEN:SPLIT $HYPHEN:MERGE $DELETE $APPEND_le"""
+    txt = """$HYPHEN:SPLIT $HYPHEN:MERGE $DELETE $APPEND_le $REPLACE:SAMEPOS_Kenya $SPLIT_sa $INFLECT:PROPN;Gender=Masc"""
 
     for l in txt.split('\n'):
         ids = tagger.encode_line(l)

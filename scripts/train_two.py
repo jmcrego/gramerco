@@ -73,7 +73,8 @@ def load_data(args, tagger, tokenizer):
         args.data_path + ".train",
         tagger,
         tokenizer,
-        ignore_clean=args.ignore_clean
+        ignore_clean=args.ignore_clean,
+        word_index=args.word_index,
     )
     train_iter = make_iterator(train_dataset, args)
 
@@ -83,7 +84,8 @@ def load_data(args, tagger, tokenizer):
             args.data_path + ".dev",
             tagger,
             tokenizer,
-            ignore_clean=args.ignore_clean
+            ignore_clean=args.ignore_clean,
+            word_index=args.word_index,
         )
         valid_iter = make_iterator(
             valid_dataset,
@@ -99,7 +101,8 @@ def load_data(args, tagger, tokenizer):
             args.data_path + ".test",
             tagger,
             tokenizer,
-            ignore_clean=args.ignore_clean
+            ignore_clean=args.ignore_clean,
+            word_index=args.word_index,
         )
         test_iter = make_iterator(
             test_dataset,
@@ -119,7 +122,8 @@ def train(args, device):
     # init tag encoder
     tagger = TagEncoder2(
         path_to_lex=args.path_to_lex,
-        path_to_voc=args.path_to_voc
+        path_to_voc=args.path_to_voc,
+        new_version=args.word_index,
     )
 
     # init model
@@ -133,6 +137,7 @@ def train(args, device):
         mid=model_id,
         freeze_encoder=(args.freeze_encoder > 0),
         dropout=args.dropout,
+        word_index=args.word_index,
     ).to(device)
 
     try:
@@ -181,6 +186,11 @@ def train(args, device):
         logging.info("starting from iteration {}".format(num_iter))
     else:
         num_iter = 0
+        if args.pretrained:
+            logging.info("load pretrained encoder from: " + args.pretrained)
+            model.encoder.load_state_dict(torch.load(
+                args.pretrained
+            ))
     lr = args.learning_rate / float(args.grad_cumul_iter)
     if num_iter > args.freeze_encoder:
         model.freeze_encoder = False
@@ -230,14 +240,20 @@ def train(args, device):
             criterion.train()
 
             #  TRAIN STEP
+            if args.word_index:
+                batch["noise_data"]["word_index"] = batch["word_index"]["input_ids"]
 
-            out = model(**batch["noise_data"])
+            out = model(
+                **batch["noise_data"]
+            )
             # tag_out, voc_out, attention_mask
 
             sizes_out = out["attention_mask"].sum(-1)
             sizes_tgt = batch["tag_data"]["attention_mask"].sum(-1)
             # select only compatible sizes in out vs target
             coincide_mask = sizes_out == sizes_tgt
+
+            # logging.debug("coincide = " + str(coincide_mask))
 
             tgt = batch["tag_data"]["input_ids"]
             # logging.debug("TAGs out = " + str(out.data.argmax(-1)[:20]))
@@ -247,6 +263,8 @@ def train(args, device):
             #     logging.debug(tokenizer.convert_ids_to_tokens(batch["noise_data"][
             #         "input_ids"][~coincide_mask][0][batch["noise_data"]["attention_mask"][~coincide_mask][0].bool()]))
 
+            # logging.debug(str(out))
+            # logging.debug(str(tgt))
             loss = criterion(out, tgt, coincide_mask, batch, tagger,
                              mask_keep_prob=args.random_keep_mask)
             loss.backward()
@@ -333,7 +351,12 @@ def train(args, device):
                                     valid_batch
                                 )
 
-                            out = model(**valid_batch["noise_data"])
+                            if args.word_index:
+                                valid_batch["noise_data"]["word_index"] = valid_batch["word_index"]["input_ids"]
+
+                            out = model(
+                                **valid_batch["noise_data"]
+                            )
 
                             sizes_out = out["attention_mask"].sum(-1)
                             sizes_tgt = valid_batch["tag_data"]["attention_mask"].sum(-1)
@@ -473,7 +496,13 @@ def train(args, device):
                 if device == "cuda":
                     test_batch = fairseq_utils.move_to_cuda(
                         test_batch)
-                out = model(**test_batch["noise_data"])
+
+                if args.word_index:
+                    test_batch["noise_data"]["word_index"] = test_batch["word_index"]["input_ids"]
+
+                out = model(
+                    **test_batch["noise_data"]
+                )
 
                 sizes_out = out["attention_mask"].sum(-1)
                 sizes_tgt = test_batch["tag_data"]["attention_mask"].sum(-1)
@@ -568,6 +597,11 @@ if __name__ == "__main__":
         "--tokenizer",
         default="flaubert/flaubert_base_cased",
         help="Name of Huggingface tokenizer used.",
+    )
+    parser.add_argument(
+        "--pretrained",
+        default="",
+        help="Path to pretrained encoder.",
     )
     parser.add_argument(
         "--num-workers",
@@ -689,6 +723,11 @@ if __name__ == "__main__":
         default=5,
         help="Threshold number of consecutive validation scores not improved \
         to consider training over.",
+    )
+    parser.add_argument(
+        "--word-index",
+        action="store_true",
+        help="Use word index.",
     )
 
     args = parser.parse_args()

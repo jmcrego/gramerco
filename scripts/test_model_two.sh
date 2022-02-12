@@ -26,7 +26,7 @@ python test_model_two.py \
       --sample 1000000 \
       --log DEBUG \
       --model-iter -1 \
-      --k-best 1 \
+      --k-best 20 \
       --save $SAVE_PATH \
       --model-id freeze20k+ls0.2+cumul4+rdm0.5-normal1 \
       --lex $DATA_DIR/Lexique383.tsv \

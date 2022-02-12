@@ -181,7 +181,7 @@ def test(args):
                             args,
                             return_corrected=args.num_iter > 1,
                         )
-                        tag_ids, voc_ids = res["tags"], res["vocs"]
+                        # tag_ids, voc_ids = res["tags"], res["vocs"]
 
                         ids = tagger.tag_word_to_id_vec(voc_ids, tag_ids)
 
@@ -198,26 +198,20 @@ def test(args):
                         # logging.info("voc >>> " + str(voc_ids[voc_ids.ne(-1)].cpu().long().numpy()))
 
                         if len(tag_ids) != len(ref_tag_ids):
-                            logging.info("-" * 152)
-                            logging.info(">>> " + t)
-                            logging.info(
-                                " ".join(
-                                    word_tokenizer.tokenize(
-                                        t.rstrip('\n'),
-                                        max_length=510
-                                    )
-                                )
-                            )
-                            logging.info("=== " + " ".join(
-                                tagger.id_to_tag(rid.item())
-                                for rid in ref_ids
-                            ))
+                            # logging.info("-" * 152)
+                            # logging.info(">>> " + t)
                             # logging.info(
-                            #     "tag ids diff >>> "
-                            #     + str(i * args.batch_size + k)
-                            #     + "\t | " + str(len(tag_ids))
-                            #     + "-" + str(len(ref_tag_ids))
+                            #     " ".join(
+                            #         word_tokenizer.tokenize(
+                            #             t.rstrip('\n'),
+                            #             max_length=510
+                            #         )
+                            #     )
                             # )
+                            # logging.info("=== " + " ".join(
+                            #     tagger.id_to_tag(rid.item())
+                            #     for rid in ref_ids
+                            # ))
                             continue
                         if len(voc_ids) != len(ref_voc_ids):
                             # logging.info("voc ids diff >>> " + str(i * args.batch_size + k))
@@ -459,15 +453,17 @@ def test(args):
     sorted_inflect_ids = inflect_ids[inflect_mask][sorted_inflect_idx]
 
     for i in range(min(50, len(acc_infls))):
+
         logging.info(
-            str(i) + "-th worst: "
-            + tagger._id_to_tag[sorted_inflect_ids[i]] + "\t\t\t acc = "
-            + str(
+            "{:>5}".format(str(i)) + "-th worst: "
+            + "{:<80}".format(tagger._id_to_tag[sorted_inflect_ids[i]])
+            + "acc = "
+            + "{:<5.3f}  ".format(
                 acc_infls[sorted_inflect_idx][i]
-            ) + "\t\t"
-            + str(
-                inflect_acc[:, 1][inflect_mask][sorted_inflect_idx][i]
             )
+            + "{:<5}".format(str(
+                int(inflect_acc[:, 1][inflect_mask][sorted_inflect_idx][i])
+            ))
         )
 
     # pred_error_types = (pred_tags[ref_tags.ne(0)] +

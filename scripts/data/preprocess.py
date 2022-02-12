@@ -164,26 +164,59 @@ if __name__ == "__main__":
         "--num-workers", default=1, type=int, help="Number of workers to parallelize",
     )
     parser.add_argument(
+        "--word-index", action="store_true", help="Use word index.",
+    )
+    parser.add_argument(
         "--version", default=1, type=int, help="Version of the Tag Encoder",
     )
     args = parser.parse_args()
 
     create_logger("stderr", args.log)
     if args.version == 2:
-        tagger = TagEncoder2(path_to_lex=args.lex, path_to_voc=args.app,)
+        tagger = TagEncoder2(
+            path_to_lex=args.lex,
+            path_to_voc=args.app,
+            new_version=args.word_index
+        )
     else:
         tagger = TagEncoder(path_to_lex=args.lex, path_to_app=args.app,)
     tokenizer = FlaubertTokenizer.from_pretrained("flaubert/flaubert_base_cased")
     voc_tag = Dictionary(tagger, encoder_type="tag_encoder", version=args.version)
-    voc_tok = Dictionary(tokenizer, encoder_type="tokenizer")
+    if args.word_index:
+        voc_tok_widx = Dictionary(tokenizer, encoder_type="pretokenizer")
+        voc_widx = Dictionary(tokenizer, encoder_type="word_index")
+    else:
+        voc_tok = Dictionary(tokenizer, encoder_type="tokenizer")
 
-    for suffix in ["", ".tag", ".noise"]:
-        vocab = voc_tag if suffix == ".tag" else voc_tok
+    if args.word_index:
+        for suffix in [".tag", ".widx1", ".widx2"]:
+            suffix_out = suffix
+            if suffix == ".tag":
+                vocab = voc_tag
+            elif suffix == ".widx1":
+                vocab = voc_tok_widx
+                suffix = suffix[:-1]
+                suffix_out = ".noise"
+            elif suffix == ".widx2":
+                vocab = voc_widx
+                suffix = suffix[:-1]
+                suffix_out = suffix
 
-        make_binary_dataset(
-            vocab,
-            args.file + suffix,
-            args.out + suffix,
-            "fr",
-            num_workers=args.num_workers,
-        )
+            make_binary_dataset(
+                vocab,
+                args.file + suffix,
+                args.out + suffix_out,
+                "fr",
+                num_workers=args.num_workers,
+            )
+    else:
+        for suffix in ["", ".tag", ".noise", ".widx"]:
+            vocab = voc_tag if suffix == ".tag" else voc_tok
+
+            make_binary_dataset(
+                vocab,
+                args.file + suffix,
+                args.out + suffix,
+                "fr",
+                num_workers=args.num_workers,
+            )

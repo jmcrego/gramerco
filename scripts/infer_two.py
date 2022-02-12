@@ -115,10 +115,12 @@ def read_lexicon(f, vocab):
 
 
 def inflect_tag_to_dict(tag):
-    try:
-        d = {e.split('=')[0]: e.split('=')[1] for e in tag.split(';')[1:]}
-    except:
-        logging.info(tag)
+
+    d = {
+        e.split('=')[0]: e.split('=')[1] for e in tag.split(';')[1:]
+        if '=' in e
+    }
+
     d["POS"] = tag.split(';')[0]
     return d
 

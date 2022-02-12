@@ -8,7 +8,11 @@ from tqdm import tqdm
 BUFFER_SIZE = 10 ** 9
 
 
-def partition(length: int, dev_size: float, test_size: float, train_size: float):
+def partition(
+        length: int,
+        dev_size: float,
+        test_size: float,
+        train_size: float):
     assert dev_size + test_size < 1.0
 
     idxs = np.arange(length)
@@ -86,9 +90,31 @@ if __name__ == "__main__":
         default="info",
         help="Logging level [debug, info, warning, critical, error] (info)",
     )
-    parser.add_argument("-dev", default=0.01, type=float, help="dev data proportion")
-    parser.add_argument("-test", default=0.01, type=float, help="test data proportion")
-    parser.add_argument("-train", default=-1, type=float, help="train data proportion")
+
+    parser.add_argument(
+        "--word-index",
+        action='store_true',
+        help="use word index."
+    )
+
+    parser.add_argument(
+        "-dev",
+        default=0.01,
+        type=float,
+        help="dev data proportion"
+    )
+    parser.add_argument(
+        "-test",
+        default=0.01,
+        type=float,
+        help="test data proportion"
+    )
+    parser.add_argument(
+        "-train",
+        default=-1,
+        type=float,
+        help="train data proportion"
+    )
 
     args = parser.parse_args()
     create_logger("stderr", args.log)
@@ -109,3 +135,4 @@ if __name__ == "__main__":
     write_partition(args.file, ".fr", chooser)
     write_partition(args.file, ".tag.fr", chooser)
     write_partition(args.file, ".noise.fr", chooser)
+    write_partition(args.file, ".widx.fr", chooser)
