@@ -9,8 +9,8 @@ import torch.optim as optim
 import argparse
 from tqdm import tqdm
 from data.gramerco_dataset import GramercoDataset
-from model_gec.gec_bert import GecBertVocModel
-from tag_encoder import TagEncoder2
+from model_gec.gec_bert import GecBertVocModel, GecBertInflVocModel
+from tag_encoder import TagEncoder2, TagEncoder3
 from tokenizer import WordTokenizer
 import logging
 import matplotlib.pyplot as plt
@@ -48,10 +48,17 @@ def test(args):
     )
     word_tokenizer = WordTokenizer(FlaubertTokenizer)
     # lexicon = Lexicon(args.path_to_lex)
-    tagger = TagEncoder2(
-        path_to_lex=args.path_to_lex,
-        path_to_voc=args.path_to_voc,
-    )
+    if args.inflection_layer:
+        tagger = TagEncoder3(
+            path_to_lex=args.path_to_lex,
+            path_to_voc=args.path_to_voc,
+        )
+    else:
+        tagger = TagEncoder2(
+            path_to_lex=args.path_to_lex,
+            path_to_voc=args.path_to_voc,
+            new_version=args.word_index,
+        )
     lex = read_lexicon(args.path_to_lex, tagger.worder.word_to_id.keys())
 
     if os.path.isfile(
@@ -72,13 +79,23 @@ def test(args):
             args.model_id,
             "model_best.pt",
         )
-    model = GecBertVocModel(
-        len(tagger),
-        len(tagger.worder),
-        tokenizer=tokenizer,
-        tagger=tagger,
-        mid=args.model_id,
-    )
+    if args.inflection_layer:
+        model = GecBertInflVocModel(
+            len(tagger),
+            len(tagger.inflecter),
+            len(tagger.worder),
+            tokenizer=tokenizer,
+            tagger=tagger,
+            mid=args.model_id,
+        )
+    else:
+        model = GecBertVocModel(
+            len(tagger),
+            len(tagger.worder),
+            tokenizer=tokenizer,
+            tagger=tagger,
+            mid=args.model_id,
+        )
 
     device = "cuda:" + str(args.gpu_id) \
         if args.gpu and torch.cuda.is_available() else "cpu"
@@ -127,8 +144,12 @@ def test(args):
     ref_tags_tot = list()
     ids_ref_tot = list()
     tag_word_cpts = np.zeros((tagger._w_cpt, 2))
-    inflect_ids = np.array(tagger.infer_ids)
-    inflect_acc = np.zeros((len(inflect_ids), 2))
+    if not args.inflection_layer:
+        inflect_ids = np.array(tagger.infer_ids)
+        inflect_acc = np.zeros((len(inflect_ids), 2))
+        inflect_matrix = np.zeros((len(inflect_ids), len(inflect_ids)), dtype=np.int64)
+    else:
+        tag_infl_cpts = np.zeros(2)
     if args.raw:
         for i in tqdm(range(len(txt_src) // args.batch_size + 1)):
             # if i == 5:
@@ -138,6 +159,8 @@ def test(args):
             batch_tag_ref = txt_tag[args.batch_size *
                                     i: min(args.batch_size * (i + 1), len(txt_tag))]
             # logging.info("noise >>> " + batch_txt[0])
+            if len(batch_txt) == 0:
+                break
             for j in range(args.num_iter):
                 toks = tokenizer(
                     batch_txt,
@@ -156,17 +179,34 @@ def test(args):
                     # logging.info(" outputs ### " + str(out))
                     for k, t in enumerate(batch_txt):
 
+                        # logging.info(t)
+                        # logging.info(str([
+                        #     tokenizer._convert_id_to_token(u.item()) for u in toks["input_ids"][k][
+                        #         toks["attention_mask"][k].bool()
+                        #     ]
+                        # ]))
+
                         # logging.info("-" * 100)
 
-                        tag_out = out["tag_out"][k][out["attention_mask"][k].bool()]
-                        voc_out = out["voc_out"][k][out["attention_mask"][k].bool()]
+                        tag_out = out["tag_out"][k][
+                            out["attention_mask"][k].bool()
+                        ]
+                        voc_out = out["voc_out"][k][
+                            out["attention_mask"][k].bool()
+                        ]
+                        if args.inflection_layer:
+                            infl_out = out["infl_out"][k][
+                                out["attention_mask"][k].bool()
+                            ]
                         tag_ids = tag_out.argmax(-1)
                         voc_ids = voc_out.argmax(-1)
+                        infl_ids = infl_out.argmax(-1)
                         tag_proposals = torch.argsort(
                             tag_out, dim=-1, descending=True
                         )
                         tag_ids_ = tag_ids
                         voc_ids_ = voc_ids
+                        infl_ids_ = infl_ids
 
                         # logging.info(str(voc_ids_[tag_ids == tagger._tag_to_id["$SPLIT"]]))
 
@@ -179,19 +219,24 @@ def test(args):
                             tagger,
                             lex,
                             args,
+                            infls=infl_ids,
                             return_corrected=args.num_iter > 1,
                         )
                         # tag_ids, voc_ids = res["tags"], res["vocs"]
-
-                        ids = tagger.tag_word_to_id_vec(voc_ids, tag_ids)
-
+                        if args.inflection_layer:
+                            ids = tagger.tag_word_to_id_vec(voc_ids, infl_ids, tag_ids)
+                        else:
+                            ids = tagger.tag_word_to_id_vec(voc_ids, tag_ids)
+                        # logging.info(str(t))
+                        # logging.info(str(batch_tag_ref[k]))
                         ref_ids = torch.tensor([
                             tagger.tag_to_id(tag)
                             for tag in batch_tag_ref[k].split(" ")
                         ], device=device).long()
                         ref_tag_ids = tagger.id_to_tag_id_vec(ref_ids)
                         ref_voc_ids = tagger.id_to_word_id_vec(ref_ids)
-
+                        if args.inflection_layer:
+                            ref_infl_ids = tagger.id_to_infl_id_vec(ref_ids)
                         ref = ref_ids.bool()
 
                         # logging.info("tag >>> " + str(tag_ids.cpu().long().numpy()))
@@ -249,37 +294,77 @@ def test(args):
                         pred_tags_tot.append(tag_ids)
                         ids_ref_tot.append(ref_ids)
 
-                        for err_id in range(len(tagger.id_error_type)):
-                            pred_types_i = pred_types[ref_types == err_id]
-                            accs[err_id] += (pred_types_i == err_id).long(
-                            ).sum().item()
-                            lens[err_id] += len(pred_types_i)
+                        # for err_id in range(len(tagger.id_error_type)):
+                        #     pred_types_i = pred_types[ref_types == err_id]
+                        #     accs[err_id] += (pred_types_i == err_id).long(
+                        #     ).sum().item()
+                        #     lens[err_id] += len(pred_types_i)
+                        mask_same = (ref_types == pred_types)
+                        vals_acc, cpts_acc = np.unique(
+                            ref_types[mask_same].numpy(), return_counts=True
+                        )
+                        vals_len, cpts_len = np.unique(
+                            ref_types.numpy().flatten(), return_counts=True
+                        )
+                        accs[vals_acc] += cpts_acc
+                        lens[vals_len] += cpts_len
 
-                        for word_tag_id in range(tagger._w_cpt):
-                            tid = word_tag_id + tagger._curr_cpt - tagger._w_cpt
-                            # 195 194 193 192 191 ....
-                            mask_voc = (
-                                (ref_tag_ids == tid)
-                                & voc_ids.ne(-1)
-                                & ref_voc_ids.ne(-1)
-                            )
+                        # for word_tag_id in range(tagger._w_cpt):
+                        #     tid = word_tag_id + tagger._curr_cpt - tagger._w_cpt
+                        #     # 195 194 193 192 191 ....
+                        #     mask_voc = (
+                        #         (ref_tag_ids == tid)
+                        #         & voc_ids.ne(-1)
+                        #         & ref_voc_ids.ne(-1)
+                        #     )
+                        #
+                        #     tag_word_cpts[word_tag_id, 0] += (
+                        #         voc_ids[mask_voc] == ref_voc_ids[mask_voc]
+                        #     ).long().sum().item()
+                        #     tag_word_cpts[word_tag_id, 1] += (
+                        #         mask_voc
+                        #     ).long().sum().item()
+                        tids = (
+                            np.arange(tagger._w_cpt)
+                            + tagger._curr_cpt
+                            - tagger._w_cpt
+                        )
+                        word_tag_mask = (
+                            (tids[0] <= ref_tag_ids) & (ref_tag_ids <= tids[-1]))
+                        mask_same = (
+                            ids[word_tag_mask] == ref_ids[word_tag_mask])
+                        vals_acc, cpts_acc = np.unique(
+                            ref_tag_ids[word_tag_mask][mask_same].numpy(),
+                            return_counts=True
+                        )
+                        vals_len, cpts_len = np.unique(
+                            ref_tag_ids[word_tag_mask].numpy(),
+                            return_counts=True
+                        )
+                        vals_acc = vals_acc - tagger._curr_cpt + tagger._w_cpt
+                        vals_len = vals_len - tagger._curr_cpt + tagger._w_cpt
+                        tag_word_cpts[vals_acc, 0] += cpts_acc
+                        tag_word_cpts[vals_len, 1] += cpts_len
 
-                            tag_word_cpts[word_tag_id, 0] += (
-                                voc_ids[mask_voc] == ref_voc_ids[mask_voc]
+                        if args.inflection_layer:
+                            # Inflection prediction scores
+                            infl_mask = ref_infl_ids.ne(-1)
+                            tag_infl_cpts[0] += (
+                                ref_infl_ids[infl_mask] == infl_ids[infl_mask]
                             ).long().sum().item()
-                            tag_word_cpts[word_tag_id, 1] += (
-                                mask_voc
+                            tag_infl_cpts[1] += (
+                                infl_mask
                             ).long().sum().item()
-
-                        for ii in range(len(inflect_ids)):
-                            tid = inflect_ids[ii]
-                            mask_voc = (ref_tag_ids == tid)
-                            inflect_acc[ii, 0] += (
-                                tag_ids[mask_voc] == tid
-                            ).long().sum().item()
-                            inflect_acc[ii, 1] += (
-                                mask_voc
-                            ).long().sum().item()
+                        else:
+                            for ii in range(len(inflect_ids)):
+                                tid = inflect_ids[ii]
+                                mask_voc = (ref_tag_ids == tid)
+                                inflect_acc[ii, 0] += (
+                                    tag_ids[mask_voc] == tid
+                                ).long().sum().item()
+                                inflect_acc[ii, 1] += (
+                                    mask_voc
+                                ).long().sum().item()
     else:
         for i, test_batch in enumerate(tqdm(test_iter.next_epoch_itr(shuffle=False))):
 
@@ -295,6 +380,9 @@ def test(args):
                     test_batch = fairseq_utils.move_to_cuda(test_batch)
                 # logging.info(" inputs ### " + str(test_batch["noise_data"]))
                 out = model(**test_batch["noise_data"])  # tag_out, attention_mask
+
+                if args.word_index:
+                    test_batch["noise_data"]["word_index"] = test_batch["word_index"]["input_ids"]
                 # logging.info(" outputs ### " + str(out))
                 sizes_out = out["attention_mask"].sum(-1)
                 sizes_tgt = test_batch["tag_data"]["attention_mask"].sum(-1)
@@ -409,6 +497,7 @@ def test(args):
         ref_tags_,
         pred_tags_,
     )
+    # logging.info(str(inflect_matrix))
     logging.info(str(matrix.shape))
     logging.info(len(tagger))
     num_true = matrix.diagonal()
@@ -426,45 +515,54 @@ def test(args):
             str(tag_word_cpts[i, 0] / tag_word_cpts[i, 1])
         )
 
-    inflect_mask = inflect_acc[:, 1] > 0
-
-    logging.info(
-        "mean $INFLECT acc = " +
-        str(
-            np.average(
-                inflect_acc[:, 0][inflect_mask]
-                / inflect_acc[:, 1][inflect_mask],
-                weights=inflect_acc[:, 1][inflect_mask]
-            ).item()
+    if args.inflection_layer:
+        logging.info(
+            "mean $INFLECT acc = " +
+            str(
+                tag_infl_cpts[0]
+                / tag_infl_cpts[1],
+            )
         )
-    )
-
-    logging.info(
-        "mean $INFLECT class acc = " +
-        str(
-            (inflect_acc[:, 0][inflect_mask]
-            / inflect_acc[:, 1][inflect_mask]
-        ).mean().item())
-    )
-
-    acc_infls = inflect_acc[:, 0][inflect_mask] / inflect_acc[:, 1][inflect_mask]
-
-    sorted_inflect_idx = np.argsort(acc_infls)
-    sorted_inflect_ids = inflect_ids[inflect_mask][sorted_inflect_idx]
-
-    for i in range(min(50, len(acc_infls))):
+    else:
+        inflect_mask = inflect_acc[:, 1] > 0
 
         logging.info(
-            "{:>5}".format(str(i)) + "-th worst: "
-            + "{:<80}".format(tagger._id_to_tag[sorted_inflect_ids[i]])
-            + "acc = "
-            + "{:<5.3f}  ".format(
-                acc_infls[sorted_inflect_idx][i]
+            "mean $INFLECT acc = " +
+            str(
+                np.average(
+                    inflect_acc[:, 0][inflect_mask]
+                    / inflect_acc[:, 1][inflect_mask],
+                    weights=inflect_acc[:, 1][inflect_mask]
+                ).item()
             )
-            + "{:<5}".format(str(
-                int(inflect_acc[:, 1][inflect_mask][sorted_inflect_idx][i])
-            ))
         )
+
+        logging.info(
+            "mean $INFLECT class acc = " +
+            str(
+                (inflect_acc[:, 0][inflect_mask]
+                / inflect_acc[:, 1][inflect_mask]
+            ).mean().item())
+        )
+
+        acc_infls = inflect_acc[:, 0][inflect_mask] / inflect_acc[:, 1][inflect_mask]
+
+        sorted_inflect_idx = np.argsort(acc_infls)
+        sorted_inflect_ids = inflect_ids[inflect_mask][sorted_inflect_idx]
+
+        for i in range(min(50, len(acc_infls))):
+
+            logging.info(
+                "{:>5}".format(str(i)) + "-th worst: "
+                + "{:<80}".format(tagger._id_to_tag[sorted_inflect_ids[i]])
+                + "acc = "
+                + "{:<5.3f}  ".format(
+                    acc_infls[sorted_inflect_idx][i]
+                )
+                + "{:<5}".format(str(
+                    int(inflect_acc[:, 1][inflect_mask][sorted_inflect_idx][i])
+                ))
+            )
 
     # pred_error_types = (pred_tags[ref_tags.ne(0)] +
     #                     1).apply_(tagger.get_tag_category).long()
@@ -717,6 +815,16 @@ if __name__ == "__main__":
         '--out-tags',
         default=None,
         help='File path where to write word|tag correction indications.'
+    )
+    parser.add_argument(
+        '--word-index',
+        action="store_true",
+        help='Usage of word index.'
+    )
+    parser.add_argument(
+        '--inflection-layer',
+        action="store_true",
+        help='Use a separate layer for the inflections.'
     )
 
     args = parser.parse_args()

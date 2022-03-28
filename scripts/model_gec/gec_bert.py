@@ -59,14 +59,14 @@ class GecBertModel(nn.Module):
 
     def _generate_word_index(self, x):
         word_ends = x.clone().cpu().apply_(lambda t: self._is_end_of_word(t))
-        tildes = (x == self.tokenizer._convert_token_to_id("~</w>"))
+        # tildes = (x == self.tokenizer._convert_token_to_id("~</w>"))
         # logging.debug("tildes " + str(tildes[7].float()))
-        comb_tildes = tildes[:, 1:-1] | tildes[:, 2:] | tildes[:, :-2]
+        # comb_tildes = tildes[:, 1:-1] | tildes[:, 2:] | tildes[:, :-2]
         # logging.debug("comb tildes " + str(comb_tildes[7].float()))
-        word_ends[:, 1:-1][comb_tildes] = 0.  # consider expresions as 1 "word" to be tagged
+        # word_ends[:, 1:-1][comb_tildes] = 0.  # consider expresions as 1 "word" to be tagged
 
-        alone_apos = (x == self.tokenizer._convert_token_to_id("'</w>"))[:, 1:]
-        word_ends[:, :-1][alone_apos] = 0.
+        # alone_apos = (x == self.tokenizer._convert_token_to_id("'</w>"))[:, 1:]
+        # word_ends[:, :-1][alone_apos] = 0.
         # logging.debug("word ends " + str(word_ends[7]))
         word_ends = torch.roll(word_ends, 1, -1)
         word_ends[:, 0] = 0
@@ -88,7 +88,6 @@ class GecBertModel(nn.Module):
         else:
             word_index = self._generate_word_index(
                 inputs["input_ids"]).to(h.last_hidden_state.device)
-
         # agregate encoding states according to the word indexing.
         h_w = word_collate(h.last_hidden_state, word_index)
         # adapt the output attention mask to update padding.
@@ -200,6 +199,54 @@ class GecBertVocModel(GecBertModel):
             return iter(itertools.chain(
                 self.linear_layer.parameters(),
                 self.voc_layer.parameters()
+            ))
+        return super().parameters()
+
+
+class GecBertInflVocModel(GecBertModel):
+    """Gec Model with 3 final layers.
+    One for error type tag prediction (including all inflections).
+    One for word prediction on a given vocabulary
+    of tens of thousands of words.
+    One for inflection prediction on a given set of inflections.
+    """
+    def __init__(
+        self,
+        num_tag,
+        num_infl,
+        num_voc,
+        **kwargs
+    ):
+        super(GecBertInflVocModel, self).__init__(num_tag, **kwargs)
+        h_size = self.encoder.attentions[0].out_lin.out_features
+        # Linear layer of inflections
+        self.infl_layer = nn.Linear(h_size, num_infl)
+        # Linear layer of vocabulary
+        self.voc_layer = nn.Linear(h_size, num_voc)
+
+    def forward(self, **inputs):
+        h, h_w, attention_mask_larger = self.forward_encoder(**inputs)
+
+        attention_mask = torch.zeros_like(
+            attention_mask_larger).to(h.last_hidden_state.device)
+        attention_mask[:, 1:-1] = attention_mask_larger[:, 2:]
+        out_tag = self.linear_layer(h_w)
+        out_infl = self.infl_layer(h_w)
+        out_voc = self.voc_layer(h_w)
+
+        return {
+            "tag_out": out_tag,
+            "voc_out": out_voc,
+            "infl_out": out_infl,
+            "attention_mask": attention_mask,
+        }
+
+    def parameters(self):
+        if self.freeze_encoder:
+            return iter(itertools.chain(
+                self.linear_layer.parameters(),
+                self.infl_layer.parameters(),
+                self.voc_layer.parameters(),
             ))
         return super().parameters()
 

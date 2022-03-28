@@ -6,8 +6,8 @@ import torch.optim as optim
 import argparse
 from tqdm import tqdm
 from data.gramerco_dataset import GramercoDataset
-from model_gec.gec_bert import GecBertVocModel
-from tag_encoder import TagEncoder2
+from model_gec.gec_bert import GecBertVocModel, GecBertInflVocModel
+from tag_encoder import TagEncoder2, TagEncoder3
 from tokenizer import WordTokenizer
 import logging
 import matplotlib.pyplot as plt
@@ -280,6 +280,7 @@ def get_tags_vocs_from_proposals(
     tagger: TagEncoder2,
     lex,
     args,
+    infls=None,
 ):
     if len(toks) != tag_proposals.size(0):
         # logging.debug(len(toks))
@@ -342,7 +343,10 @@ def get_tags_vocs_from_proposals(
                     new_voc[i] = idx[voc_out[i][idx].argmax(-1)]
 
             elif tag.startswith("$INFLECT"):
-                inflection = tag.split(':')[-1]
+                if infls is not None:
+                    inflection = tagger.inflecter.id_to_infl[infls[i].item()]
+                else:
+                    inflection = tag.split(':')[-1]
                 inflection = get_inflection(toks[i], inflection, lex, tagger)
                 if inflection:
                     can_move_on = True
@@ -371,7 +375,9 @@ def apply_tags(
     new_toks = list()
     order_edits = dict()
     for i in range(len(toks)):
-        tag = tagger._id_to_tag[tags[i].item()]
+        tag = tags[i]
+        if not isinstance(tag, str):
+            tag = tagger._id_to_tag[tag.item()]
         # logging.info(str(i) + " HYPOTHESIS " + str(j) + " : " + tag)
         # vocs = [tagger.worder.id_to_word[i.item()] for i in voc_ids]
         if tag.startswith("$REPLACE"):
@@ -467,11 +473,17 @@ def apply_tags_with_constraint(
     tagger: TagEncoder2,
     lex,
     args,
+    infls=None,
     return_corrected=True,
 ):
     toks = tokenizer.tokenize(sentence.rstrip('\n'), max_length=510)
 
     res = dict()
+    # logging.info("+++ " + str((toks)))
+    # logging.info(">>> " + str(len(toks)))
+    # logging.info(">>> " + str(tag_proposals.shape))
+    # logging.info(">>> " + str(infls.shape))
+    # logging.info(">>> " + str(voc_out.shape))
 
     tags, vocs, infs = get_tags_vocs_from_proposals(
         toks,
@@ -480,16 +492,22 @@ def apply_tags_with_constraint(
         tagger,
         lex,
         args,
+        infls=infls,
     )
     if args.return_tag_voc:
         res["vocs"] = vocs
         res["tags"] = tags
+        if infls is not None:
+            res["infls"] = infs
 
     if args.out_tags:
-        tags = [tagger.id_to_tag(i.item()) for i in tagger.tag_word_to_id_vec(vocs, tags)]
+        if infls is not None:
+            tags = [tagger.id_to_tag(i.item()) for i in tagger.tag_word_to_id_vec(vocs, infls, tags)]
+        else:
+            tags = [tagger.id_to_tag(i.item()) for i in tagger.tag_word_to_id_vec(vocs, tags)]
         with open(args.out_tags, 'a') as f:
             f.write(' '.join([w + '|' + t for w, t in zip(toks, tags)]) + '\n')
-            # logging.info(' '.join([w + '|' + t for w, t in zip(toks, tags)]) + '\n')
+            logging.info(' '.join([w + '|' + t for w, t in zip(toks, tags)]) + '\n')
 
     if return_corrected:
         res["text"] = apply_tags(
@@ -751,10 +769,17 @@ def infer(args):
     )
     word_tokenizer = WordTokenizer(FlaubertTokenizer)
     # lexicon = Lexicon(args.lex)
-    tagger = TagEncoder2(
-        path_to_lex=args.lex,
-        path_to_voc=args.voc,
-    )
+    if args.inflection_layer:
+        tagger = TagEncoder3(
+            path_to_lex=args.lex,
+            path_to_voc=args.voc,
+        )
+    else:
+        tagger = TagEncoder2(
+            path_to_lex=args.lex,
+            path_to_voc=args.voc,
+            new_version=args.word_index,
+        )
     lex = read_lexicon(args.lex, tagger.worder.word_to_id.keys())
 
     path_to_model = os.path.join(
@@ -762,13 +787,23 @@ def infer(args):
         args.model_id,
         "model_best.pt",
     )
-    model = GecBertVocModel(
-        len(tagger),
-        len(tagger.worder),
-        tokenizer=tokenizer,
-        tagger=tagger,
-        mid=args.model_id,
-    )
+    if args.inflection_layer:
+        model = GecBertInflVocModel(
+            len(tagger),
+            len(tagger.inflecter),
+            len(tagger.worder),
+            tokenizer=tokenizer,
+            tagger=tagger,
+            mid=args.model_id,
+        )
+    else:
+        model = GecBertVocModel(
+            len(tagger),
+            len(tagger.worder),
+            tokenizer=tokenizer,
+            tagger=tagger,
+            mid=args.model_id,
+        )
 
     device = "cuda:" + str(args.gpu_id) \
         if args.gpu and torch.cuda.is_available() else "cpu"
@@ -807,6 +842,8 @@ def infer(args):
     for i in range(len(txt) // args.batch_size + 1):
         if i > 0:
             print()
+        if args.batch_size * i == min(args.batch_size * (i + 1), len(txt)):
+            break
         batch_txt = txt[args.batch_size *
                         i: min(args.batch_size * (i + 1), len(txt))]
         for j in range(args.num_iter):
@@ -831,11 +868,17 @@ def infer(args):
 
                     tag_out = out["tag_out"][k][out["attention_mask"][k].bool()]
                     voc_out = out["voc_out"][k][out["attention_mask"][k].bool()]
+                    if args.inflection_layer:
+                        infl_out = out["infl_out"][k][out["attention_mask"][k].bool()]
 
                     tag_proposals = torch.argsort(
-                        tag_out, dim=-1, descending=True)
+                        tag_out, dim=-1, descending=True
+                    )
                     voc_proposals = torch.argsort(
-                        voc_out, dim=-1, descending=True)
+                        voc_out, dim=-1, descending=True
+                    )
+                    if args.inflection_layer:
+                        infls_ids = infl_out.argmax(-1)
 
                     # tags = [tagger._id_to_tag[i.item()] for i in tag_ids]
                     # vocs = [tagger.worder.id_to_word[i.item()] for i in voc_ids]
@@ -855,6 +898,7 @@ def infer(args):
                         tagger,
                         lex,
                         args,
+                        infls=infls_ids,
                     )["text"]
         print('\n'.join(batch_txt))
 
@@ -949,6 +993,16 @@ if __name__ == "__main__":
         '--out-tags',
         default=None,
         help='file for the tagged output words'
+    )
+    parser.add_argument(
+        '--samepos',
+        action='store_true',
+        help='Use same pos tag.'
+    )
+    parser.add_argument(
+        "--inflection-layer",
+        action="store_true",
+        help="Use a separate layer for inflections.",
     )
 
     args = parser.parse_args()

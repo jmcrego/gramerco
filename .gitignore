@@ -1,4 +1,5 @@
 resources
+scripts/logs
 scripts/data/__pycache__/
 scripts/model-GECToR/__pycache__/
 noiser/__pycache__/

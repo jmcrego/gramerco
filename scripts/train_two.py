@@ -8,10 +8,10 @@ from tqdm import tqdm
 from data.gramerco_dataset import GramercoDataset, make_dataset_from_prefix
 from fairseq.data import iterators, data_utils
 import fairseq.utils as fairseq_utils
-from model_gec.gec_bert import GecBertVocModel
-from model_gec.criterions import DecisionLoss, CompensationLoss, CrossEntropyLoss, CETwoLoss
+from model_gec.gec_bert import GecBertVocModel, GecBertInflVocModel
+from model_gec.criterions import DecisionLoss, CompensationLoss, CrossEntropyLoss, CETwoLoss, CEThreeLoss
 from transformers import FlaubertTokenizer
-from tag_encoder import TagEncoder, TagEncoder2
+from tag_encoder import TagEncoder, TagEncoder2, TagEncoder3
 
 import os
 import sys
@@ -120,25 +120,45 @@ def train(args, device):
     # init tokenizer
     tokenizer = FlaubertTokenizer.from_pretrained(args.tokenizer)
     # init tag encoder
-    tagger = TagEncoder2(
-        path_to_lex=args.path_to_lex,
-        path_to_voc=args.path_to_voc,
-        new_version=args.word_index,
-    )
+    if args.inflection_layer:
+        args.model_type = "inflection-layer"
+        tagger = TagEncoder3(
+            path_to_lex=args.path_to_lex,
+            path_to_voc=args.path_to_voc,
+        )
+    else:
+        tagger = TagEncoder2(
+            path_to_lex=args.path_to_lex,
+            path_to_voc=args.path_to_voc,
+            new_version=args.word_index,
+        )
 
     # init model
     model_id = args.model_id if args.model_id else str(int(time.time()))
     model_id = model_id + "-" + args.model_type
-    model = GecBertVocModel(
-        len(tagger),
-        len(tagger.worder),
-        tokenizer=tokenizer,
-        tagger=tagger,
-        mid=model_id,
-        freeze_encoder=(args.freeze_encoder > 0),
-        dropout=args.dropout,
-        word_index=args.word_index,
-    ).to(device)
+    if args.inflection_layer:
+        model = GecBertInflVocModel(
+            len(tagger),
+            len(tagger.inflecter),
+            len(tagger.worder),
+            tokenizer=tokenizer,
+            tagger=tagger,
+            mid=model_id,
+            freeze_encoder=(args.freeze_encoder > 0),
+            dropout=args.dropout,
+            word_index=args.word_index,
+        ).to(device)
+    else:
+        model = GecBertVocModel(
+            len(tagger),
+            len(tagger.worder),
+            tokenizer=tokenizer,
+            tagger=tagger,
+            mid=model_id,
+            freeze_encoder=(args.freeze_encoder > 0),
+            dropout=args.dropout,
+            word_index=args.word_index,
+        ).to(device)
 
     try:
         os.mkdir(os.path.join(args.save, model.id))
@@ -170,7 +190,9 @@ def train(args, device):
                 "model_{}.pt".format(args.continue_from)
             )
         )
-        logging.info("starting from iteration {}".format(model_info["num_iter"]))
+        logging.info(
+            "starting from iteration {}".format(
+                model_info["num_iter"]))
         model.load_state_dict(model_info["model_state_dict"])
     else:
         model_info = None
@@ -179,7 +201,10 @@ def train(args, device):
     train_iter, valid_iter, test_iter = load_data(args, tagger, tokenizer)
 
     # init criterion
-    criterion = CETwoLoss(label_smoothing=args.label_smoothing)
+    if args.inflection_layer:
+        criterion = CEThreeLoss(label_smoothing=args.label_smoothing)
+    else:
+        criterion = CETwoLoss(label_smoothing=args.label_smoothing)
 
     if model_info:
         num_iter = model_info["num_iter"]
@@ -343,8 +368,11 @@ def train(args, device):
                         FP = 0
                         TN = 0
                         tag_word_cpts = np.zeros((tagger._w_cpt, 2))
+                        tag_infl_cpts = np.zeros(2)
                         accs = np.zeros(len(tagger.id_error_type))
                         lens = np.zeros(len(tagger.id_error_type))
+                        pred_lens = np.zeros(len(tagger.id_error_type))
+                        miss = np.zeros(len(tagger.id_error_type))
                         for valid_batch in tqdm(valid_iter.next_epoch_itr()):
                             if device == "cuda":
                                 valid_batch = fairseq_utils.move_to_cuda(
@@ -359,7 +387,8 @@ def train(args, device):
                             )
 
                             sizes_out = out["attention_mask"].sum(-1)
-                            sizes_tgt = valid_batch["tag_data"]["attention_mask"].sum(-1)
+                            sizes_tgt = valid_batch["tag_data"]["attention_mask"].sum(
+                                -1)
                             coincide_mask = sizes_out == sizes_tgt
 
                             tgt_mask = valid_batch["tag_data"]["attention_mask"][
@@ -369,14 +398,26 @@ def train(args, device):
 
                             ref_tag = tagger.id_to_tag_id_vec(ref_ids)
                             ref_voc = tagger.id_to_word_id_vec(ref_ids)
+                            if args.inflection_layer:
+                                ref_infl = tagger.id_to_infl_id_vec(ref_ids)
 
                             pred_tag = out["tag_out"][coincide_mask][
-                                    out["attention_mask"][coincide_mask].bool()
+                                out["attention_mask"][coincide_mask].bool()
                             ].argmax(-1)
                             pred_voc = out["voc_out"][coincide_mask][
-                                    out["attention_mask"][coincide_mask].bool()
+                                out["attention_mask"][coincide_mask].bool()
                             ].argmax(-1)
-                            pred_ids = tagger.tag_word_to_id_vec(pred_voc, pred_tag)
+                            if args.inflection_layer:
+                                pred_infl = out["infl_out"][coincide_mask][
+                                    out["attention_mask"][coincide_mask].bool()
+                                ].argmax(-1)
+                                pred_ids = tagger.tag_word_to_id_vec(
+                                    pred_voc, pred_infl, pred_tag
+                                )
+                            else:
+                                pred_ids = tagger.tag_word_to_id_vec(
+                                    pred_voc, pred_tag
+                                )
 
                             # Error detection scores
                             ref_dec = ref_tag.ne(0)
@@ -398,34 +439,95 @@ def train(args, device):
                             ref_types = ref_ids.clone().cpu().apply_(
                                 tagger.get_tag_category
                             ).long()
-                            for err_id in range(len(tagger.id_error_type)):
-                                pred_types_i = pred_types[ref_types == err_id]
-                                accs[err_id] += (
-                                    pred_types_i == err_id
+                            ref_types[ref_types.ne(0) & ref_types.ne(9)] = 1
+                            # for err_id in range(len(tagger.id_error_type)):
+                            #     pred_types_i = pred_types[ref_types == err_id]
+                            #     accs[err_id] += (
+                            #         pred_types_i == err_id
+                            #     ).long().sum().item()
+                            #     lens[err_id] += len(pred_types_i)
+                            mask_same = (ref_types == pred_types)
+                            vals_acc, cpts_acc = np.unique(
+                                ref_types[mask_same].numpy(),
+                                return_counts=True
+                            )
+                            vals_miss, cpts_miss = np.unique(
+                                ref_types[~mask_same].numpy(),
+                                return_counts=True
+                            )
+                            vals_len, cpts_len = np.unique(
+                                ref_types.numpy().flatten(),
+                                return_counts=True
+                            )
+                            accs[vals_acc] += cpts_acc
+                            lens[vals_len] += cpts_len
+                            vals_cpt_len, cpts_pred_len = np.unique(
+                                pred_types.numpy().flatten(),
+                                return_counts=True
+                            )
+                            pred_lens[vals_cpt_len] += cpts_pred_len
+                            miss[vals_miss] += cpts_miss
+                            # logging.info("num miss " + str(list(zip(vals_miss, cpts_miss))))
+                            # logging.info("num good " + str(list(zip(vals_acc, cpts_acc))))
+                            # logging.info("num pred " + str(list(zip(vals_cpt_len, cpts_pred_len))))
+                            # logging.info("num refs " + str(list(zip(vals_len, cpts_len))))
+
+
+                            if args.inflection_layer:
+                                # Inflection prediction scores
+                                infl_mask = ref_infl.ne(-1)
+                                tag_infl_cpts[0] += (
+                                    ref_infl[infl_mask] == pred_infl[infl_mask]
                                 ).long().sum().item()
-                                lens[err_id] += len(pred_types_i)
+                                tag_infl_cpts[1] += (
+                                    infl_mask
+                                ).long().sum().item()
+
 
                             # Word prediction scores
-                            for word_tag_id in range(tagger._w_cpt):
-                                tid = word_tag_id + tagger._curr_cpt - tagger._w_cpt
-                                tag_word_cpts[word_tag_id, 0] += (
-                                    pred_tag[ref_tag == tid] == tid
-                                ).long().sum().item()
-                                tag_word_cpts[word_tag_id, 1] += (
-                                    ref_tag == tid
-                                ).long().sum().item()
+                            # for word_tag_id in range(tagger._w_cpt):
+                            #     tid = word_tag_id + tagger._curr_cpt - tagger._w_cpt
+                            #     tag_word_cpts[word_tag_id, 0] += (
+                            #         pred_tag[ref_tag == tid] == tid
+                            #     ).long().sum().item()
+                            #     tag_word_cpts[word_tag_id, 1] += (
+                            #         ref_tag == tid
+                            #     ).long().sum().item()
+                            tids = (
+                                np.arange(tagger._w_cpt)
+                                + tagger._curr_cpt
+                                - tagger._w_cpt
+                            )
+                            word_tag_mask = (
+                                (tids[0] <= ref_tag) & (ref_tag <= tids[-1]))
+                            mask_same = (
+                                pred_ids[word_tag_mask] == ref_ids[word_tag_mask])
+                            vals_acc, cpts_acc = np.unique(
+                                ref_tag[word_tag_mask][mask_same].numpy(),
+                                return_counts=True
+                            )
+                            vals_len, cpts_len = np.unique(
+                                ref_tag[word_tag_mask].numpy(),
+                                return_counts=True
+                            )
+                            vals_acc = vals_acc - tagger._curr_cpt + tagger._w_cpt
+                            vals_len = vals_len - tagger._curr_cpt + tagger._w_cpt
+                            tag_word_cpts[vals_acc, 0] += cpts_acc
+                            tag_word_cpts[vals_len, 1] += cpts_len
 
                             val_loss = criterion(
                                 out, tgt_ids, coincide_mask, valid_batch, tagger,
                             ).item()
                             val_losses.append(val_loss)
                         del valid_batch
+                        logging.info("word acc = " + str(tag_word_cpts))
                         val_loss = sum(val_losses) / len(val_losses)
                         writer.add_scalar(
                             os.path.join("Loss/valid"),
                             val_loss,
                             num_iter,
                         )
+                        logging.info(str(list(zip(tagger.id_error_type, accs, miss, lens, pred_lens))))
 
                         # Store scores in tensorboard
                         recall = TP / (TP + FN)
@@ -440,9 +542,16 @@ def train(args, device):
                                 num_iter,
                             )
 
+                        if args.inflection_layer:
+                            writer.add_scalar(
+                                "InflectionAccuracy",
+                                tag_infl_cpts[0] / tag_infl_cpts[1],
+                                num_iter,
+                            )
+
                         for i in range(tagger._w_cpt):
                             if tag_word_cpts[i, 1] > 0:
-                                tid = word_tag_id + tagger._curr_cpt - tagger._w_cpt
+                                tid = i + tagger._curr_cpt - tagger._w_cpt
                                 writer.add_scalar(
                                     "WordError/{}".format(tagger._id_to_tag[tid][1:]),
                                     tag_word_cpts[i, 0] / tag_word_cpts[i, 1],
@@ -728,6 +837,11 @@ if __name__ == "__main__":
         "--word-index",
         action="store_true",
         help="Use word index.",
+    )
+    parser.add_argument(
+        "--inflection-layer",
+        action="store_true",
+        help="Use a separate layer for inflections.",
     )
 
     args = parser.parse_args()

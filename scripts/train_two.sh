@@ -15,10 +15,10 @@ CUDA_VISIBLE_DEVICES=1 \
 CUDA_LAUNCH_BLOCKING=1 \
 python train_two.py $DATA_BIN/$DATA_NAME \
       --log DEBUG \
-      --model-id word-index \
+      --model-id word-index-debug-2 \
+      --inflection-layer \
       --save $SAVE_PATH \
-      --pretrained $DATA_DIR/models/pretrained/model_weights.pt \
-      --continue-from none \
+      --continue-from last \
       --lex $DATA_DIR/Lexique383.tsv \
       --voc $DATA_DIR/common/french.dic.50k \
       --tokenizer flaubert/flaubert_base_cased \
@@ -38,8 +38,9 @@ python train_two.py $DATA_BIN/$DATA_NAME \
       --ignore-clean \
       --freeze-encoder 10000 \
       --grad-cumul-iter 4 \
-      --random-keep-mask 0.5 \
+      --random-keep-mask 0.9 \
       --valid \
       --test \
       --word-index \
       --gpu \
+      --pretrained $DATA_DIR/models/pretrained/model_weights.pt \

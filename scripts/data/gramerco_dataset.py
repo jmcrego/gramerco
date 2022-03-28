@@ -200,6 +200,7 @@ class GramercoDataset2(FairseqDataset):
             sample["clean_data"] = self.clean_dataset[idx]
 
         sample["word_index"] = self.idx_dataset[idx]
+        # logging.info(sample["word_index"])
 
         return sample
 

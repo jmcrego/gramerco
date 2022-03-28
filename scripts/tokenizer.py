@@ -30,10 +30,17 @@ class WordTokenizer:
             toks = toks[:max_length]
         final_toks = list()
         current_word = ""
+        # for tok in toks:
+        #     if tok == "'</w>":
+        #         current_word += "'"
+        #     elif tok[-4:] == "</w>":
+        #         final_toks.append(current_word + tok[:-4])
+        #         current_word = ""
+        #     else:
+        #         current_word += tok
+
         for tok in toks:
-            if tok == "'</w>":
-                current_word += "'"
-            elif tok[-4:] == "</w>":
+            if tok[-4:] == "</w>":
                 final_toks.append(current_word + tok[:-4])
                 current_word = ""
             else:

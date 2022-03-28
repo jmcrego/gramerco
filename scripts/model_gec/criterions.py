@@ -1,5 +1,6 @@
 import torch
 import logging
+import numpy as np
 
 
 class CrossEntropyLoss(torch.nn.Module):
@@ -116,6 +117,7 @@ class CETwoLoss(torch.nn.Module):
                 device=t.device
             ) > mask_keep_prob
         )
+        # logging.info("cpt inflects in tgt: " + str(((10 < t_tag) & (t_tag < 190)).long().sum().item()))
         loss_tag = self.ce(
             y_tag[keep_mask],
             t_tag[keep_mask],
@@ -132,3 +134,65 @@ class CETwoLoss(torch.nn.Module):
             loss_voc = torch.zeros_like(loss_voc)
 
         return loss_tag + self.beta * loss_voc
+
+class CEThreeLoss(torch.nn.Module):
+    """Loss compatible with GecBertInflVocModel.
+    Performs cross entropy loss on the predictions of the last layers.
+    """
+    def __init__(self, label_smoothing=0.0, beta=1., gamma=1.):
+        super(CEThreeLoss, self).__init__()
+        self.ce = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        self.beta = beta
+        self.gamma = gamma
+        logging.info("vocabulary loss weight = " + str(self.beta))
+        logging.info("inflection loss weight = " + str(self.gamma))
+
+    def forward(self, out, tgt, mask, x, tagger, mask_keep_prob=0):
+        assert "voc_out" in out
+        assert "infl_out" in out
+        att_mask_out = out["attention_mask"][mask].bool()
+        att_mask_in = x["tag_data"]["attention_mask"][mask].bool()
+
+        y_tag = out["tag_out"][mask][att_mask_out]
+        t = tgt[mask][att_mask_in].long()
+        t_tag = tagger.id_to_tag_id_vec(t)
+        # logging.info(str(torch.unique(t_tag, return_counts=True)))
+        t_word = tagger.id_to_word_id_vec(t)
+        t_infl = tagger.id_to_infl_id_vec(t)
+        keep_mask = t_tag.ne(0) | (
+            torch.rand(
+                t.shape,
+                device=t.device
+            ) > mask_keep_prob
+        )
+        # logging.info("cpt inflects in tgt: " + str(((10 < t_tag) & (t_tag < 190)).long().sum().item()))
+        # logging.info(">>>" + str(list(zip(*np.unique(t_tag[keep_mask].numpy(), return_counts=True)))))
+        t_tag[t_tag.ne(0) & t_tag.ne(9)] = 1
+        # logging.info("<<<" + str(list(zip(*np.unique(t_tag[keep_mask].numpy(), return_counts=True)))))
+        loss_tag = self.ce(
+            y_tag[keep_mask],
+            t_tag[keep_mask],
+        )
+
+        infl_mask = t_infl.ne(-1)
+        y_infl = out["voc_out"][mask][att_mask_out][infl_mask]
+        t_infl = t_infl[infl_mask]
+        loss_infl = self.ce(
+            y_infl,
+            t_infl,
+        )
+
+        voc_mask = t_word.ne(-1)
+        y_voc = out["voc_out"][mask][att_mask_out][voc_mask]
+        t_voc = t_word[voc_mask]
+        loss_voc = self.ce(
+            y_voc,
+            t_voc,
+        )
+        if not infl_mask.any():
+            loss_infl = torch.zeros_like(loss_infl)
+
+        if not voc_mask.any():
+            loss_voc = torch.zeros_like(loss_voc)
+
+        return loss_tag + self.gamma * loss_infl + self.beta * loss_voc
