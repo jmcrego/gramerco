@@ -409,12 +409,7 @@ def train(args, device):
                                 .apply_(tagger.get_tag_category)
                                 .long()
                             )
-                            # for err_id in range(len(tagger.id_error_type)):
-                            #     pred_types_i = pred_types[ref_types == err_id]
-                            #     accs[err_id] += (
-                            #         pred_types_i == err_id
-                            #     ).long().sum().item()
-                            #     lens[err_id] += len(pred_types_i)
+
                             mask_same = ref_types == pred_types
                             vals_acc, cpts_acc = np.unique(
                                 ref_types[mask_same].numpy(), return_counts=True
