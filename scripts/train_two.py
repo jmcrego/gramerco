@@ -9,7 +9,13 @@ from data.gramerco_dataset import GramercoDataset, make_dataset_from_prefix
 from fairseq.data import iterators, data_utils
 import fairseq.utils as fairseq_utils
 from model_gec.gec_bert import GecBertVocModel, GecBertInflVocModel
-from model_gec.criterions import DecisionLoss, CompensationLoss, CrossEntropyLoss, CETwoLoss, CEThreeLoss
+from model_gec.criterions import (
+    DecisionLoss,
+    CompensationLoss,
+    CrossEntropyLoss,
+    CETwoLoss,
+    CEThreeLoss,
+)
 from transformers import FlaubertTokenizer
 from tag_encoder import TagEncoder, TagEncoder2, TagEncoder3
 
@@ -30,7 +36,8 @@ def make_iterator(dataset, args, is_eval=False, max_sentences=None):
 
     # filter sentences too long
     indices, _ = dataset.filter_indices_by_size(
-        indices, args.max_positions, args.min_positions)
+        indices, args.max_positions, args.min_positions
+    )
 
     if max_sentences:
         ii = np.arange(len(indices))
@@ -38,9 +45,7 @@ def make_iterator(dataset, args, is_eval=False, max_sentences=None):
             with data_utils.numpy_seed(args.seed):
                 np.random.shuffle(ii)
 
-        indices = indices[
-            np.sort(ii[:max_sentences])
-        ]
+        indices = indices[np.sort(ii[:max_sentences])]
 
     # implicit batch size
     batch_sampler = dataset.batch_by_size(
@@ -88,10 +93,8 @@ def load_data(args, tagger, tokenizer):
             word_index=args.word_index,
         )
         valid_iter = make_iterator(
-            valid_dataset,
-            args,
-            is_eval=True,
-            max_sentences=50000)
+            valid_dataset, args, is_eval=True, max_sentences=50000
+        )
     else:
         valid_iter = None
 
@@ -104,11 +107,7 @@ def load_data(args, tagger, tokenizer):
             ignore_clean=args.ignore_clean,
             word_index=args.word_index,
         )
-        test_iter = make_iterator(
-            test_dataset,
-            args,
-            is_eval=True,
-            max_sentences=50000)
+        test_iter = make_iterator(test_dataset, args, is_eval=True, max_sentences=50000)
     else:
         test_iter = None
 
@@ -123,8 +122,7 @@ def train(args, device):
     if args.inflection_layer:
         args.model_type = "inflection-layer"
         tagger = TagEncoder3(
-            path_to_lex=args.path_to_lex,
-            path_to_voc=args.path_to_voc,
+            path_to_lex=args.path_to_lex, path_to_voc=args.path_to_voc,
         )
     else:
         tagger = TagEncoder2(
@@ -147,6 +145,7 @@ def train(args, device):
             freeze_encoder=(args.freeze_encoder > 0),
             dropout=args.dropout,
             word_index=args.word_index,
+            random_init=args.encoder_random_init,
         ).to(device)
     else:
         model = GecBertVocModel(
@@ -158,6 +157,7 @@ def train(args, device):
             freeze_encoder=(args.freeze_encoder > 0),
             dropout=args.dropout,
             word_index=args.word_index,
+            random_init=args.encoder_random_init,
         ).to(device)
 
     try:
@@ -167,32 +167,24 @@ def train(args, device):
     except BaseException:
         ...
 
-    if args.continue_from and args.continue_from != "none" and os.path.isfile(
-        os.path.join(
-            args.save,
-            model.id,
-            "model_{}.pt".format(args.continue_from)
+    if (
+        args.continue_from
+        and args.continue_from != "none"
+        and os.path.isfile(
+            os.path.join(args.save, model.id, "model_{}.pt".format(args.continue_from))
         )
     ):
         # load parameters from given checkpoint
         logging.info(
-            "continue from " +
-            os.path.join(
-                args.save,
-                model.id,
-                "model_{}.pt".format(args.continue_from)
+            "continue from "
+            + os.path.join(
+                args.save, model.id, "model_{}.pt".format(args.continue_from)
             )
         )
         model_info = torch.load(
-            os.path.join(
-                args.save,
-                model.id,
-                "model_{}.pt".format(args.continue_from)
-            )
+            os.path.join(args.save, model.id, "model_{}.pt".format(args.continue_from))
         )
-        logging.info(
-            "starting from iteration {}".format(
-                model_info["num_iter"]))
+        logging.info("starting from iteration {}".format(model_info["num_iter"]))
         model.load_state_dict(model_info["model_state_dict"])
     else:
         model_info = None
@@ -213,9 +205,7 @@ def train(args, device):
         num_iter = 0
         if args.pretrained:
             logging.info("load pretrained encoder from: " + args.pretrained)
-            model.encoder.load_state_dict(torch.load(
-                args.pretrained
-            ))
+            model.encoder.load_state_dict(torch.load(args.pretrained))
     lr = args.learning_rate / float(args.grad_cumul_iter)
     if num_iter > args.freeze_encoder:
         model.freeze_encoder = False
@@ -223,9 +213,7 @@ def train(args, device):
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     if args.tensorboard:
-        writer = SummaryWriter(log_dir=os.path.join(
-            args.save, "tensorboard", model.id
-        ))
+        writer = SummaryWriter(log_dir=os.path.join(args.save, "tensorboard", model.id))
     if args.valid:
         stopper = EarlyStopping(patience=args.early_stopping)
     else:
@@ -237,11 +225,7 @@ def train(args, device):
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
         },
-        os.path.join(
-            args.save,
-            model.id,
-            "model_best.pt"
-        )
+        os.path.join(args.save, model.id, "model_best.pt"),
     )
 
     optimizer.zero_grad()
@@ -268,9 +252,7 @@ def train(args, device):
             if args.word_index:
                 batch["noise_data"]["word_index"] = batch["word_index"]["input_ids"]
 
-            out = model(
-                **batch["noise_data"]
-            )
+            out = model(**batch["noise_data"])
             # tag_out, voc_out, attention_mask
 
             sizes_out = out["attention_mask"].sum(-1)
@@ -290,8 +272,14 @@ def train(args, device):
 
             # logging.debug(str(out))
             # logging.debug(str(tgt))
-            loss = criterion(out, tgt, coincide_mask, batch, tagger,
-                             mask_keep_prob=args.random_keep_mask)
+            loss = criterion(
+                out,
+                tgt,
+                coincide_mask,
+                batch,
+                tagger,
+                mask_keep_prob=args.random_keep_mask,
+            )
             loss.backward()
 
             if num_iter % args.grad_cumul_iter == 0:
@@ -304,9 +292,7 @@ def train(args, device):
 
             if args.tensorboard:
                 writer.add_scalar(
-                    os.path.join("Loss/train"),
-                    loss.item(),
-                    num_iter,
+                    os.path.join("Loss/train"), loss.item(), num_iter,
                 )
                 del loss
 
@@ -317,19 +303,16 @@ def train(args, device):
                     os.path.join(
                         args.save,
                         model.id,
-                        "model_{}.pt".format(
-                            num_iter - 5 * args.valid_iter
-                        ),
+                        "model_{}.pt".format(num_iter - 5 * args.valid_iter),
                     )
                 ):
                     os.remove(
                         os.path.join(
                             args.save,
                             model.id,
-                            "model_{}.pt".format(
-                                num_iter - 5 * args.valid_iter
-                            ),
-                        ))
+                            "model_{}.pt".format(num_iter - 5 * args.valid_iter),
+                        )
+                    )
                 # Regular model save (checkpoint)
                 torch.save(
                     {
@@ -337,23 +320,11 @@ def train(args, device):
                         "model_state_dict": model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
                     },
-                    os.path.join(
-                        args.save,
-                        model.id,
-                        "model_{}.pt".format(num_iter),
-                    )
+                    os.path.join(args.save, model.id, "model_{}.pt".format(num_iter),),
                 )
                 shutil.copy2(
-                    os.path.join(
-                        args.save,
-                        model.id,
-                        "model_{}.pt".format(num_iter),
-                    ),
-                    os.path.join(
-                        args.save,
-                        model.id,
-                        "model_last.pt",
-                    ),
+                    os.path.join(args.save, model.id, "model_{}.pt".format(num_iter),),
+                    os.path.join(args.save, model.id, "model_last.pt",),
                 )
                 if args.valid:
                     if device == "cuda":
@@ -371,28 +342,28 @@ def train(args, device):
                         tag_infl_cpts = np.zeros(2)
                         accs = np.zeros(len(tagger.id_error_type))
                         lens = np.zeros(len(tagger.id_error_type))
-                        pred_lens = np.zeros(len(tagger.id_error_type))
-                        miss = np.zeros(len(tagger.id_error_type))
+                        # pred_lens = np.zeros(len(tagger.id_error_type))
+                        # miss = np.zeros(len(tagger.id_error_type))
                         for valid_batch in tqdm(valid_iter.next_epoch_itr()):
                             if device == "cuda":
-                                valid_batch = fairseq_utils.move_to_cuda(
-                                    valid_batch
-                                )
+                                valid_batch = fairseq_utils.move_to_cuda(valid_batch)
 
                             if args.word_index:
-                                valid_batch["noise_data"]["word_index"] = valid_batch["word_index"]["input_ids"]
+                                valid_batch["noise_data"]["word_index"] = valid_batch[
+                                    "word_index"
+                                ]["input_ids"]
 
-                            out = model(
-                                **valid_batch["noise_data"]
-                            )
+                            out = model(**valid_batch["noise_data"])
 
                             sizes_out = out["attention_mask"].sum(-1)
                             sizes_tgt = valid_batch["tag_data"]["attention_mask"].sum(
-                                -1)
+                                -1
+                            )
                             coincide_mask = sizes_out == sizes_tgt
 
                             tgt_mask = valid_batch["tag_data"]["attention_mask"][
-                                coincide_mask]
+                                coincide_mask
+                            ]
                             tgt_ids = valid_batch["tag_data"]["input_ids"]
                             ref_ids = tgt_ids[coincide_mask][tgt_mask.bool()]
 
@@ -415,74 +386,67 @@ def train(args, device):
                                     pred_voc, pred_infl, pred_tag
                                 )
                             else:
-                                pred_ids = tagger.tag_word_to_id_vec(
-                                    pred_voc, pred_tag
-                                )
+                                pred_ids = tagger.tag_word_to_id_vec(pred_voc, pred_tag)
 
                             # Error detection scores
                             ref_dec = ref_tag.ne(0)
                             pred_dec = pred_tag.ne(0)
-                            TP += ((pred_dec == ref_dec) &
-                                   ref_dec).long().sum().item()
-                            TN += (
-                                (pred_dec == ref_dec) & ~ref_dec
-                            ).long().sum().item()
-                            FN += ((pred_dec != ref_dec) &
-                                   ref_dec).long().sum().item()
-                            FP += ((pred_dec != ref_dec) & ~
-                                   ref_dec).long().sum().item()
+                            TP += ((pred_dec == ref_dec) & ref_dec).long().sum().item()
+                            TN += ((pred_dec == ref_dec) & ~ref_dec).long().sum().item()
+                            FN += ((pred_dec != ref_dec) & ref_dec).long().sum().item()
+                            FP += ((pred_dec != ref_dec) & ~ref_dec).long().sum().item()
 
                             # Error type scores
-                            pred_types = pred_ids.clone().cpu().apply_(
-                                tagger.get_tag_category
-                            ).long()
-                            ref_types = ref_ids.clone().cpu().apply_(
-                                tagger.get_tag_category
-                            ).long()
-                            ref_types[ref_types.ne(0) & ref_types.ne(9)] = 1
+                            pred_types = (
+                                pred_ids.clone()
+                                .cpu()
+                                .apply_(tagger.get_tag_category)
+                                .long()
+                            )
+                            ref_types = (
+                                ref_ids.clone()
+                                .cpu()
+                                .apply_(tagger.get_tag_category)
+                                .long()
+                            )
                             # for err_id in range(len(tagger.id_error_type)):
                             #     pred_types_i = pred_types[ref_types == err_id]
                             #     accs[err_id] += (
                             #         pred_types_i == err_id
                             #     ).long().sum().item()
                             #     lens[err_id] += len(pred_types_i)
-                            mask_same = (ref_types == pred_types)
+                            mask_same = ref_types == pred_types
                             vals_acc, cpts_acc = np.unique(
-                                ref_types[mask_same].numpy(),
-                                return_counts=True
+                                ref_types[mask_same].numpy(), return_counts=True
                             )
-                            vals_miss, cpts_miss = np.unique(
-                                ref_types[~mask_same].numpy(),
-                                return_counts=True
-                            )
+                            # vals_miss, cpts_miss = np.unique(
+                            #     ref_types[~mask_same].numpy(), return_counts=True
+                            # )
                             vals_len, cpts_len = np.unique(
-                                ref_types.numpy().flatten(),
-                                return_counts=True
+                                ref_types.numpy().flatten(), return_counts=True
                             )
                             accs[vals_acc] += cpts_acc
                             lens[vals_len] += cpts_len
-                            vals_cpt_len, cpts_pred_len = np.unique(
-                                pred_types.numpy().flatten(),
-                                return_counts=True
-                            )
-                            pred_lens[vals_cpt_len] += cpts_pred_len
-                            miss[vals_miss] += cpts_miss
+                            # vals_cpt_len, cpts_pred_len = np.unique(
+                            #     pred_types.numpy().flatten(), return_counts=True
+                            # )
+                            # pred_lens[vals_cpt_len] += cpts_pred_len
+                            # miss[vals_miss] += cpts_miss
                             # logging.info("num miss " + str(list(zip(vals_miss, cpts_miss))))
                             # logging.info("num good " + str(list(zip(vals_acc, cpts_acc))))
                             # logging.info("num pred " + str(list(zip(vals_cpt_len, cpts_pred_len))))
                             # logging.info("num refs " + str(list(zip(vals_len, cpts_len))))
 
-
                             if args.inflection_layer:
                                 # Inflection prediction scores
                                 infl_mask = ref_infl.ne(-1)
                                 tag_infl_cpts[0] += (
-                                    ref_infl[infl_mask] == pred_infl[infl_mask]
-                                ).long().sum().item()
-                                tag_infl_cpts[1] += (
-                                    infl_mask
-                                ).long().sum().item()
-
+                                    (ref_infl[infl_mask] == pred_infl[infl_mask])
+                                    .long()
+                                    .sum()
+                                    .item()
+                                )
+                                tag_infl_cpts[1] += (infl_mask).long().sum().item()
 
                             # Word prediction scores
                             # for word_tag_id in range(tagger._w_cpt):
@@ -498,17 +462,16 @@ def train(args, device):
                                 + tagger._curr_cpt
                                 - tagger._w_cpt
                             )
-                            word_tag_mask = (
-                                (tids[0] <= ref_tag) & (ref_tag <= tids[-1]))
+                            word_tag_mask = (tids[0] <= ref_tag) & (ref_tag <= tids[-1])
                             mask_same = (
-                                pred_ids[word_tag_mask] == ref_ids[word_tag_mask])
+                                pred_ids[word_tag_mask] == ref_ids[word_tag_mask]
+                            )
                             vals_acc, cpts_acc = np.unique(
-                                ref_tag[word_tag_mask][mask_same].numpy(),
-                                return_counts=True
+                                ref_tag[word_tag_mask][mask_same].cpu().numpy(),
+                                return_counts=True,
                             )
                             vals_len, cpts_len = np.unique(
-                                ref_tag[word_tag_mask].numpy(),
-                                return_counts=True
+                                ref_tag[word_tag_mask].cpu().numpy(), return_counts=True
                             )
                             vals_acc = vals_acc - tagger._curr_cpt + tagger._w_cpt
                             vals_len = vals_len - tagger._curr_cpt + tagger._w_cpt
@@ -523,18 +486,27 @@ def train(args, device):
                         logging.info("word acc = " + str(tag_word_cpts))
                         val_loss = sum(val_losses) / len(val_losses)
                         writer.add_scalar(
-                            os.path.join("Loss/valid"),
-                            val_loss,
-                            num_iter,
+                            os.path.join("Loss/valid"), val_loss, num_iter,
                         )
-                        logging.info(str(list(zip(tagger.id_error_type, accs, miss, lens, pred_lens))))
+                        # logging.info(
+                        #     str(
+                        #         list(
+                        #             zip(
+                        #                 tagger.id_error_type,
+                        #                 accs,
+                        #                 miss,
+                        #                 lens,
+                        #                 pred_lens,
+                        #             )
+                        #         )
+                        #     )
+                        # )
 
                         # Store scores in tensorboard
                         recall = TP / (TP + FN)
                         precision = TP / (TP + FP)
 
-                        F2_score = 5 * recall * precision / \
-                            (4 * precision + recall)
+                        F2_score = 5 * recall * precision / (4 * precision + recall)
                         for err_id in range(len(tagger.id_error_type)):
                             writer.add_scalar(
                                 "ErrorType/{}".format(tagger.id_error_type[err_id]),
@@ -559,19 +531,13 @@ def train(args, device):
                                 )
 
                         writer.add_scalar(
-                            os.path.join("Error/detection_rate"),
-                            recall,
-                            num_iter,
+                            os.path.join("Error/detection_rate"), recall, num_iter,
                         )
                         writer.add_scalar(
-                            os.path.join("Error/precision"),
-                            precision,
-                            num_iter,
+                            os.path.join("Error/precision"), precision, num_iter,
                         )
                         writer.add_scalar(
-                            os.path.join("Error/F2_score"),
-                            F2_score,
-                            num_iter,
+                            os.path.join("Error/F2_score"), F2_score, num_iter,
                         )
                         # update for early stopping
                         stopper(val_loss)
@@ -583,9 +549,7 @@ def train(args, device):
                         os.path.join(
                             args.save, model.id, "model_{}.pt".format(num_iter)
                         ),
-                        os.path.join(
-                            args.save, model.id, "model_best.pt",
-                        ),
+                        os.path.join(args.save, model.id, "model_best.pt",),
                     )
             # test for early stopping
             if stopper and stopper.early_stop:
@@ -603,15 +567,14 @@ def train(args, device):
             test_losses = list()
             for test_batch in test_iter.next_epoch_itr():
                 if device == "cuda":
-                    test_batch = fairseq_utils.move_to_cuda(
-                        test_batch)
+                    test_batch = fairseq_utils.move_to_cuda(test_batch)
 
                 if args.word_index:
-                    test_batch["noise_data"]["word_index"] = test_batch["word_index"]["input_ids"]
+                    test_batch["noise_data"]["word_index"] = test_batch["word_index"][
+                        "input_ids"
+                    ]
 
-                out = model(
-                    **test_batch["noise_data"]
-                )
+                out = model(**test_batch["noise_data"])
 
                 sizes_out = out["attention_mask"].sum(-1)
                 sizes_tgt = test_batch["tag_data"]["attention_mask"].sum(-1)
@@ -634,7 +597,7 @@ def train(args, device):
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
         },
-        os.path.join(args.save, model.id, "model_final.pt")
+        os.path.join(args.save, model.id, "model_final.pt"),
     )
     logging.info("TRAINING OVER")
 
@@ -667,18 +630,13 @@ if __name__ == "__main__":
     parser.add_argument("data_path", help="Input bin data path")
     parser.add_argument("--save", required=True, help="save directory")
     parser.add_argument(
-        "--continue-from",
-        help="Id of the model",
+        "--continue-from", help="Id of the model",
     )
     parser.add_argument(
-        "--freeze-encoder",
-        type=int,
-        default=0,
-        help="Freeze encoder parameters.",
+        "--freeze-encoder", type=int, default=0, help="Freeze encoder parameters.",
     )
     parser.add_argument(
-        "--model-id",
-        help="Model id (default = current timestamp in seconds).",
+        "--model-id", help="Model id (default = current timestamp in seconds).",
     )
     parser.add_argument(
         "--model-type",
@@ -697,10 +655,7 @@ if __name__ == "__main__":
         "--path-to-lex", "--lex", required=True, help="Path to Lexique383.tsv",
     )
     parser.add_argument(
-        "--path-to-voc",
-        "--voc",
-        required=True,
-        help="Path to vocabulary file.",
+        "--path-to-voc", "--voc", required=True, help="Path to vocabulary file.",
     )
     parser.add_argument(
         "--tokenizer",
@@ -708,9 +663,7 @@ if __name__ == "__main__":
         help="Name of Huggingface tokenizer used.",
     )
     parser.add_argument(
-        "--pretrained",
-        default="",
-        help="Path to pretrained encoder.",
+        "--pretrained", default="", help="Path to pretrained encoder.",
     )
     parser.add_argument(
         "--num-workers",
@@ -724,9 +677,7 @@ if __name__ == "__main__":
         help="If True: write metrics in tensorboard files.",
     )
     parser.add_argument(
-        "--gpu",
-        action="store_true",
-        help="If True: Uses GPU resources available.",
+        "--gpu", action="store_true", help="If True: Uses GPU resources available.",
     )
     parser.add_argument(
         "-lang", "--language", default="fr", help="language of the data"
@@ -761,12 +712,7 @@ if __name__ == "__main__":
         default=5,
         help="Minimum size of a tokenized sentence. Sentences too short will be forgotten.",
     )
-    parser.add_argument(
-        "--n-epochs",
-        type=int,
-        default=2,
-        help="Number of epochs"
-    )
+    parser.add_argument("--n-epochs", type=int, default=2, help="Number of epochs")
     # parser.add_argument(
     #     "--decision-weight",
     #     type=float,
@@ -774,36 +720,28 @@ if __name__ == "__main__":
     #     help="Value of the tag loss weight w.r.t. to the decision loss one."
     # )
     parser.add_argument(
-        "-lr",
-        "--learning-rate",
-        type=float,
-        default=0.001,
-        help="Learning rate value."
+        "-lr", "--learning-rate", type=float, default=0.001, help="Learning rate value."
     )
     parser.add_argument(
-        "-ls",
-        "--label-smoothing",
-        type=float,
-        default=0.1,
-        help="Label smoothing."
+        "-ls", "--label-smoothing", type=float, default=0.1, help="Label smoothing."
     )
     parser.add_argument(
         "--dropout",
         type=float,
-        default=0.,
-        help="Dropout probability in the linear layers"
+        default=0.0,
+        help="Dropout probability in the linear layers",
     )
     parser.add_argument(
         "--grad-cumul-iter",
         type=int,
         default=1,
-        help="Cumulatate grad, then take optimization step every --grad-cumul-iter iterations"
+        help="Cumulatate grad, then take optimization step every --grad-cumul-iter iterations",
     )
     parser.add_argument(
         "--random-keep-mask",
         type=float,
-        default=0.,
-        help="Probability of masking a keep tag in the loss computation. Used to favor error detection."
+        default=0.0,
+        help="Probability of masking a keep tag in the loss computation. Used to favor error detection.",
     )
     parser.add_argument(
         "--valid",
@@ -834,18 +772,22 @@ if __name__ == "__main__":
         to consider training over.",
     )
     parser.add_argument(
-        "--word-index",
-        action="store_true",
-        help="Use word index.",
+        "--word-index", action="store_true", help="Use word index.",
     )
     parser.add_argument(
         "--inflection-layer",
         action="store_true",
         help="Use a separate layer for inflections.",
     )
+    parser.add_argument(
+        "--encoder-random-init",
+        action="store_true",
+        help="Initialize BERT encoder with random parameters instead of FLauBERT's.",
+    )
 
     args = parser.parse_args()
     create_logger(None, args.log)
 
     device = "cuda" if args.gpu and torch.cuda.is_available() else "cpu"
+    logging.info("Training on device : " + str(device))
     train(args, device)
