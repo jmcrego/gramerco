@@ -9,13 +9,13 @@ DATA_NAME=AFP
 DATA_DIR=../resources
 DATA_BIN=$DATA_DIR/$DATA_NAME/$DATA_NAME-bin-3
 
-# DATA_SRC=$DATA_DIR/dictates/clean/dicts.err
-# OUT_TAGS=$DATA_DIR/evals/dictates/dictates-gec-infl.tag
-# OUT_TXT=$DATA_DIR/evals/dictates/dictates-gec-infl.cor
+DATA_SRC=$DATA_DIR/dictates/clean/dicts.err
+OUT_TAGS=$DATA_DIR/evals/dictates/dictates-gec-infl.tag
+OUT_TXT=$DATA_DIR/evals/dictates/dictates-gec-infl.cor
 
-DATA_SRC=/nfs/RESEARCH/bouthors/projects/gramerco/resources/AFP/AFP-noise-lev/subtest.noise
-OUT_TAGS=/nfs/RESEARCH/bouthors/projects/gramerco/resources/evals/synthetic/subtest-gec-infl.tag
-OUT_TXT=/nfs/RESEARCH/bouthors/projects/gramerco/resources/evals/synthetic/subtest-gec-infl.cor
+# DATA_SRC=/nfs/RESEARCH/bouthors/projects/gramerco/resources/AFP/AFP-noise-lev/subtest.noise
+# OUT_TAGS=/nfs/RESEARCH/bouthors/projects/gramerco/resources/evals/synthetic/subtest-gec-infl.tag
+# OUT_TXT=/nfs/RESEARCH/bouthors/projects/gramerco/resources/evals/synthetic/subtest-gec-infl.cor
 
 SAVE_PATH=$DATA_DIR/models/gramerco-two-fr
 mkdir -p $SAVE_PATH
@@ -33,13 +33,15 @@ python infer_two.py \
       --voc $DATA_DIR/common/french.dic.50k \
       --tokenizer flaubert/flaubert_base_cased \
       --batch-size 20 \
+      --num-iter 4 \
       --out-tags $OUT_TAGS \
       --samepos \
+      --k-best -1 \
       --gpu \
       | perl $DETOKENIZER -l fr -q \
       | sed -r 's/# # #/###/g' \
       | sed -z 's/\n\n/\n/g' \
       > $OUT_TXT
 
-      # --gpu-id 1
-      # --text "Le Grève àla principaux raffineries de pétrole de Koweit pourriez mené à une révolte." \
+# --gpu-id 1
+# --text "Le Grève àla principaux raffineries de pétrole de Koweit pourriez mené à une révolte." \

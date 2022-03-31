@@ -1,5 +1,5 @@
 from data.gramerco_dataset import GramercoDataset
-from transformers import FlaubertTokenizer, FlaubertModel
+from transformers import FlaubertTokenizer, FlaubertModel, AutoConfig
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,6 +21,7 @@ except BaseException:
 class GecBertModel(nn.Module):
     """Base Gec Model with 1 final layer for all possible tags.
     """
+
     def __init__(
         self,
         num_tag,
@@ -29,16 +30,20 @@ class GecBertModel(nn.Module):
         tagger=None,
         mid=None,
         freeze_encoder=False,
-        dropout=0.,
+        dropout=0.0,
         word_index=False,
+        random_init=False,
     ):
         super(GecBertModel, self).__init__()
 
         self.tokenizer = (
-            tokenizer if tokenizer else
-            FlaubertTokenizer.from_pretrained(encoder_name)
+            tokenizer if tokenizer else FlaubertTokenizer.from_pretrained(encoder_name)
         )
-        self.encoder = FlaubertModel.from_pretrained(encoder_name)
+        if random_init:
+            config = AutoConfig.from_pretrained("flaubert/flaubert_base_cased")
+            self.encoder = FlaubertModel(config)
+        else:
+            self.encoder = FlaubertModel.from_pretrained(encoder_name)
         self.num_tag = num_tag
         h_size = self.encoder.attentions[0].out_lin.out_features
         self.linear_layer = nn.Linear(h_size, num_tag)
@@ -86,8 +91,9 @@ class GecBertModel(nn.Module):
         if self.word_index:
             word_index = inputs["word_index"]
         else:
-            word_index = self._generate_word_index(
-                inputs["input_ids"]).to(h.last_hidden_state.device)
+            word_index = self._generate_word_index(inputs["input_ids"]).to(
+                h.last_hidden_state.device
+            )
         # agregate encoding states according to the word indexing.
         h_w = word_collate(h.last_hidden_state, word_index)
         # adapt the output attention mask to update padding.
@@ -99,8 +105,9 @@ class GecBertModel(nn.Module):
     def forward(self, **inputs):
         h, h_w, attention_mask_larger = self.forward_encoder(**inputs)
 
-        attention_mask = torch.zeros_like(
-            attention_mask_larger).to(h.last_hidden_state.device)
+        attention_mask = torch.zeros_like(attention_mask_larger).to(
+            h.last_hidden_state.device
+        )
         attention_mask[:, 1:-1] = attention_mask_larger[:, 2:]
         out = self.linear_layer(h_w)
         if self.dropout_layer:
@@ -121,15 +128,8 @@ class GecBert2DecisionsModel(GecBertModel):
     One for tag preditcion along all possible tags.
     """
 
-    def __init__(
-        self,
-        num_tag,
-        **kwargs
-    ):
-        super(GecBert2DecisionsModel, self).__init__(
-            num_tag,
-            **kwargs
-        )
+    def __init__(self, num_tag, **kwargs):
+        super(GecBert2DecisionsModel, self).__init__(num_tag, **kwargs)
 
         h_size = self.encoder.attentions[0].out_lin.out_features
         self.linear_layer = nn.Linear(h_size, num_tag - 1)
@@ -142,8 +142,9 @@ class GecBert2DecisionsModel(GecBertModel):
     def forward(self, **inputs):
         h, h_w, attention_mask_larger = self.forward_encoder(**inputs)
 
-        attention_mask = torch.zeros_like(
-            attention_mask_larger).to(h.last_hidden_state.device)
+        attention_mask = torch.zeros_like(attention_mask_larger).to(
+            h.last_hidden_state.device
+        )
         attention_mask[:, 1:-1] = attention_mask_larger[:, 2:]
         out = self.linear_layer(h_w)
         out_decision = self.decision_layer(h_w)
@@ -160,7 +161,11 @@ class GecBert2DecisionsModel(GecBertModel):
 
     def parameters(self):
         if self.freeze_encoder:
-            return iter(itertools.chain(self.linear_layer.parameters(), self.decision_layer.parameters()))
+            return iter(
+                itertools.chain(
+                    self.linear_layer.parameters(), self.decision_layer.parameters()
+                )
+            )
         return super().parameters()
 
 
@@ -170,12 +175,8 @@ class GecBertVocModel(GecBertModel):
     One for word prediction on a given vocabulary
     of tens of thousands of words.
     """
-    def __init__(
-        self,
-        num_tag,
-        num_voc,
-        **kwargs
-    ):
+
+    def __init__(self, num_tag, num_voc, **kwargs):
         super(GecBertVocModel, self).__init__(num_tag, **kwargs)
         h_size = self.encoder.attentions[0].out_lin.out_features
         # Linear layer of vocabulary
@@ -184,22 +185,28 @@ class GecBertVocModel(GecBertModel):
     def forward(self, **inputs):
         h, h_w, attention_mask_larger = self.forward_encoder(**inputs)
 
-        attention_mask = torch.zeros_like(
-            attention_mask_larger).to(h.last_hidden_state.device)
+        attention_mask = torch.zeros_like(attention_mask_larger).to(
+            h.last_hidden_state.device
+        )
         attention_mask[:, 1:-1] = attention_mask_larger[:, 2:]
         out_tag = self.linear_layer(h_w)
         out_voc = self.voc_layer(h_w)
 
         # out = torch.softmax(out, -1)
         # out = self.ls(out)
-        return {"tag_out": out_tag, "voc_out": out_voc, "attention_mask": attention_mask}
+        return {
+            "tag_out": out_tag,
+            "voc_out": out_voc,
+            "attention_mask": attention_mask,
+        }
 
     def parameters(self):
         if self.freeze_encoder:
-            return iter(itertools.chain(
-                self.linear_layer.parameters(),
-                self.voc_layer.parameters()
-            ))
+            return iter(
+                itertools.chain(
+                    self.linear_layer.parameters(), self.voc_layer.parameters()
+                )
+            )
         return super().parameters()
 
 
@@ -210,13 +217,8 @@ class GecBertInflVocModel(GecBertModel):
     of tens of thousands of words.
     One for inflection prediction on a given set of inflections.
     """
-    def __init__(
-        self,
-        num_tag,
-        num_infl,
-        num_voc,
-        **kwargs
-    ):
+
+    def __init__(self, num_tag, num_infl, num_voc, **kwargs):
         super(GecBertInflVocModel, self).__init__(num_tag, **kwargs)
         h_size = self.encoder.attentions[0].out_lin.out_features
         # Linear layer of inflections
@@ -227,8 +229,9 @@ class GecBertInflVocModel(GecBertModel):
     def forward(self, **inputs):
         h, h_w, attention_mask_larger = self.forward_encoder(**inputs)
 
-        attention_mask = torch.zeros_like(
-            attention_mask_larger).to(h.last_hidden_state.device)
+        attention_mask = torch.zeros_like(attention_mask_larger).to(
+            h.last_hidden_state.device
+        )
         attention_mask[:, 1:-1] = attention_mask_larger[:, 2:]
         out_tag = self.linear_layer(h_w)
         out_infl = self.infl_layer(h_w)
@@ -243,11 +246,13 @@ class GecBertInflVocModel(GecBertModel):
 
     def parameters(self):
         if self.freeze_encoder:
-            return iter(itertools.chain(
-                self.linear_layer.parameters(),
-                self.infl_layer.parameters(),
-                self.voc_layer.parameters(),
-            ))
+            return iter(
+                itertools.chain(
+                    self.linear_layer.parameters(),
+                    self.infl_layer.parameters(),
+                    self.voc_layer.parameters(),
+                )
+            )
         return super().parameters()
 
 
@@ -293,9 +298,9 @@ if __name__ == "__main__":
                 [model.tokenizer._convert_id_to_token(s.item()) for s in x[m == 1]]
             )
         )
-    logging.info("noise data lens = " +
-                 str(batch["noise_data"]["attention_mask"].sum(-1)))
-    logging.info("tag data lens = " +
-                 str(batch["tag_data"]["attention_mask"].sum(-1)))
+    logging.info(
+        "noise data lens = " + str(batch["noise_data"]["attention_mask"].sum(-1))
+    )
+    logging.info("tag data lens = " + str(batch["tag_data"]["attention_mask"].sum(-1)))
     logging.info("tag out lens = " + str(out["attention_mask"].sum(-1)))
     logging.info("over")

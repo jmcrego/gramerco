@@ -30,14 +30,6 @@ class WordTokenizer:
             toks = toks[:max_length]
         final_toks = list()
         current_word = ""
-        # for tok in toks:
-        #     if tok == "'</w>":
-        #         current_word += "'"
-        #     elif tok[-4:] == "</w>":
-        #         final_toks.append(current_word + tok[:-4])
-        #         current_word = ""
-        #     else:
-        #         current_word += tok
 
         for tok in toks:
             if tok[-4:] == "</w>":
@@ -74,7 +66,6 @@ class WordTokenizer2():
 
     def is_further_tokenized(self, ids):
         subwords = self.flaubert_tokenizer.convert_ids_to_tokens(ids)
-        #print(' '.join(subwords))
         for i in range(len(subwords) - 1):
             if subwords[i].endswith('</w>'):
                 return True
@@ -126,11 +117,6 @@ if __name__ == "__main__":
     text = "Je l'appelle Maxime anticonstitutionnellement"
 
     t = WordTokenizer2('flaubert/flaubert_base_cased')
-
-    # print(text)
-    # t_word = WordTokenizer(FlaubertTokenizer)
-    # toks = t_word.tokenize(text)
-    # print(toks)
 
     ids = t.get_ids(text)
     print('ids', ids)

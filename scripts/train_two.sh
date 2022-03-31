@@ -10,12 +10,13 @@ SAVE_PATH=$DATA_DIR/models/gramerco-two-fr
 mkdir -p $SAVE_PATH
 mkdir -p $SAVE_PATH/tensorboard
 
+# word-index-infl-rd-init
 
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=0 \
 CUDA_LAUNCH_BLOCKING=1 \
 python train_two.py $DATA_BIN/$DATA_NAME \
       --log DEBUG \
-      --model-id word-index-debug-2 \
+      --model-id word-index-infl \
       --inflection-layer \
       --save $SAVE_PATH \
       --continue-from last \
@@ -25,7 +26,7 @@ python train_two.py $DATA_BIN/$DATA_NAME \
       --num-workers 15 \
       --tensorboard \
       -lang fr \
-      --max-tokens 4096 \
+      --max-tokens 8192 \
       --max-sentences 128 \
       --required-batch-size-multiple 1 \
       --min-positions 7 \
@@ -36,11 +37,13 @@ python train_two.py $DATA_BIN/$DATA_NAME \
       --valid-iter 5000  \
       --early-stopping 10 \
       --ignore-clean \
-      --freeze-encoder 10000 \
-      --grad-cumul-iter 4 \
-      --random-keep-mask 0.9 \
+      --freeze-encoder 1 \
+      --grad-cumul-iter 2 \
+      --random-keep-mask 0.5 \
       --valid \
       --test \
       --word-index \
       --gpu \
-      --pretrained $DATA_DIR/models/pretrained/model_weights.pt \
+      --pretrained $DATA_DIR/models/pretrained/model_weights.pt
+      # --encoder-random-init \
+      # --pretrained $DATA_DIR/models/pretrained/model_weights.pt \
